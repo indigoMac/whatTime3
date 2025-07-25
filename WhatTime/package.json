@@ -1,0 +1,33 @@
+{
+    "name": "meeting-optimizer-backend",
+    "version": "1.0.0",
+    "description": "Backend API server for Meeting Optimizer add-in",
+    "main": "server/app.js",
+    "scripts": {
+      "start-server": "node server/app.js",
+      "start": "node server/app.js",
+      "dev": "nodemon server/app.js"
+    },
+    "dependencies": {
+      "@azure/msal-node": "^2.9.2",
+      "axios": "^1.6.0",
+      "cors": "^2.8.5",
+      "dotenv": "^17.2.0",
+      "express": "^4.18.2",
+      "jsonwebtoken": "^9.0.2",
+      "jwks-rsa": "^3.0.1",
+      "node-cache": "^5.1.2"
+    },
+    "devDependencies": {
+      "nodemon": "^3.0.1"
+    },
+    "keywords": [
+      "outlook",
+      "office-addin", 
+      "meeting-optimizer",
+      "backend",
+      "api"
+    ],
+    "author": "Meeting Optimizer",
+    "license": "MIT"
+  }
