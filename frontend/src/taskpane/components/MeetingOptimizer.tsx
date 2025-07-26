@@ -24,6 +24,7 @@ import {
   CheckmarkCircle24Regular
 } from "@fluentui/react-icons";
 import { authService } from "../services/authService";
+import { AttendeeSelector, Attendee, getAttendeeEmail } from "./attendees";
 
 interface MeetingOptimizerProps {
   userProfile: any;
@@ -41,25 +42,6 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column",
     gap: "12px",
-  },
-  attendeeInput: {
-    display: "flex",
-    gap: "8px",
-    alignItems: "end",
-  },
-  attendeeList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-  },
-  attendeeItem: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "8px 12px",
-    border: "1px solid #e1e1e1",
-    borderRadius: "4px",
-    backgroundColor: "#f9f9f9",
   },
   suggestionCard: {
     marginBottom: "12px",
@@ -100,23 +82,11 @@ interface OptimizationResult {
 
 const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) => {
   const styles = useStyles();
-  const [attendees, setAttendees] = useState<string[]>([]);
-  const [newAttendee, setNewAttendee] = useState("");
+  const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [duration, setDuration] = useState("60");
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const addAttendee = () => {
-    if (newAttendee.trim() && !attendees.includes(newAttendee.trim())) {
-      setAttendees([...attendees, newAttendee.trim()]);
-      setNewAttendee("");
-    }
-  };
-
-  const removeAttendee = (email: string) => {
-    setAttendees(attendees.filter(a => a !== email));
-  };
 
   const handleOptimizeMeeting = async () => {
     if (attendees.length === 0) {
@@ -128,8 +98,11 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
       setIsOptimizing(true);
       setError(null);
       
+      // Convert attendees to email array for backend API
+      const attendeeEmails = attendees.map(getAttendeeEmail);
+      
       const result = await authService.optimizeMeeting(
-        attendees, 
+        attendeeEmails, 
         parseInt(duration) || 60
       );
       
@@ -174,58 +147,23 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
 
   return (
     <div className={styles.container}>
-      {/* Meeting Setup Section */}
+      {/* Attendee Selection */}
+      <AttendeeSelector
+        value={attendees}
+        onChange={setAttendees}
+        maxAttendees={25}
+        allowTeamGroups={true}
+      />
+
+      {/* Meeting Configuration */}
       <Card>
         <CardHeader
-          image={<People24Regular />}
-          header={<Text weight="semibold">Meeting Setup</Text>}
-          description={<Caption1>Add attendees and configure your meeting</Caption1>}
+          image={<Clock24Regular />}
+          header={<Text weight="semibold">Meeting Configuration</Text>}
+          description={<Caption1>Configure meeting duration and preferences</Caption1>}
         />
         
         <div style={{ padding: "20px" }}>
-          <div className={styles.section}>
-            <Label htmlFor="attendee-input" weight="semibold">
-              Add Attendees
-            </Label>
-            <div className={styles.attendeeInput}>
-              <Input
-                id="attendee-input"
-                placeholder="Enter email address"
-                value={newAttendee}
-                onChange={(e) => setNewAttendee(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addAttendee()}
-                style={{ flex: 1 }}
-              />
-              <Button 
-                appearance="primary" 
-                icon={<Add24Regular />}
-                onClick={addAttendee}
-                disabled={!newAttendee.trim()}
-              >
-                Add
-              </Button>
-            </div>
-            
-            {attendees.length > 0 && (
-              <div className={styles.attendeeList}>
-                <Text weight="semibold">Attendees ({attendees.length})</Text>
-                {attendees.map((email, index) => (
-                  <div key={index} className={styles.attendeeItem}>
-                    <Text>{email}</Text>
-                    <Button
-                      appearance="subtle"
-                      icon={<Delete24Regular />}
-                      onClick={() => removeAttendee(email)}
-                      size="small"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <Divider style={{ margin: "20px 0" }} />
-
           <div className={styles.section}>
             <Label htmlFor="duration-input" weight="semibold">
               Meeting Duration (minutes)

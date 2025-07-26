@@ -56,6 +56,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
     setIsAuthenticated(true);
     try {
       const profile = await authService.getUserProfile();
+      console.log(profile);
       setUserProfile(profile);
     } catch (error) {
       console.error('Failed to get user profile:', error);
@@ -78,7 +79,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
       <Header 
         logo="assets/logo-filled.png" 
         title={props.title} 
-        message={userProfile ? `Welcome, ${userProfile.displayName}` : "Welcome"} 
+        message={userProfile ? `Welcome, \n${userProfile.displayName}` : "Welcome"} 
       />
       
       {!isAuthenticated ? (

@@ -96,27 +96,6 @@
                             "type": "executeFunction"
                         }
                     ]
-                },
-                {
-                    "id": "EventRuntime",
-                    "type": "general",
-                    "code": {
-                        "page": "https://localhost:3000/commands.html",
-                        "script": "https://localhost:3000/commands.js"
-                    },
-                    "lifetime": "short",
-                    "actions": [
-                        {
-                            "id": "autoOptimizeMeeting",
-                            "type": "executeFunction",
-                            "displayName": "Auto Optimize Meeting"
-                        },
-                        {
-                            "id": "showMeetingOptimizer",
-                            "type": "executeFunction", 
-                            "displayName": "Show Meeting Optimizer"
-                        }
-                    ]
                 }
             ],
             "ribbons": [
@@ -200,16 +179,6 @@
                             ]
                         }
                     ]
-                }
-            ],
-            "events": [
-                {
-                    "type": "newMessageComposeCreated",
-                    "actionId": "autoOptimizeMeeting"
-                },
-                {
-                    "type": "appointmentOrganizerOpened",
-                    "actionId": "showMeetingOptimizer"
                 }
             ]
         }

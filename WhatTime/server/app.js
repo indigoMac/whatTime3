@@ -247,6 +247,204 @@ app.post('/api/meetings/optimize', validateBootstrapToken, async (req, res) => {
     }
 });
 
+// Search organization users - Microsoft Graph integration
+app.post('/api/users/search', validateBootstrapToken, async (req, res) => {
+    try {
+        const { query, limit = 10 } = req.body;
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({ users: [], totalCount: 0 });
+        }
+
+        // Get access token for Microsoft Graph
+        const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+            { scopes: ['https://graph.microsoft.com/User.Read.All'] },
+            { 
+                headers: { 
+                    'Authorization': `Bearer ${req.bootstrapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const accessToken = tokenResponse.data.accessToken;
+
+        // Search users in your organization using Microsoft Graph
+        const searchQuery = encodeURIComponent(query.trim());
+        const graphUrl = `https://graph.microsoft.com/v1.0/users?$search="displayName:${searchQuery}" OR "mail:${searchQuery}"&$select=id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation&$top=${limit}&$count=true`;
+
+        const graphResponse = await axios.get(graphUrl, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'ConsistencyLevel': 'eventual'  // Required for $search and $count
+            }
+        });
+
+        res.json({
+            users: graphResponse.data.value || [],
+            totalCount: graphResponse.data['@odata.count'] || graphResponse.data.value?.length || 0
+        });
+
+    } catch (error) {
+        console.error('User search error:', error);
+        
+        // If search fails, try filter instead (fallback)
+        if (error.response?.status === 400) {
+            try {
+                const { query, limit = 10 } = req.body;
+                const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+                    { scopes: ['https://graph.microsoft.com/User.Read.All'] },
+                    { headers: { 'Authorization': `Bearer ${req.bootstrapToken}` }}
+                );
+
+                const accessToken = tokenResponse.data.accessToken;
+                const searchQuery = encodeURIComponent(query.trim());
+                const graphUrl = `https://graph.microsoft.com/v1.0/users?$filter=startswith(displayName,'${searchQuery}') or startswith(mail,'${searchQuery}')&$select=id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation&$top=${limit}`;
+
+                const graphResponse = await axios.get(graphUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                return res.json({
+                    users: graphResponse.data.value || [],
+                    totalCount: graphResponse.data.value?.length || 0
+                });
+            } catch (fallbackError) {
+                console.error('Fallback search also failed:', fallbackError);
+            }
+        }
+
+        res.status(500).json({ 
+            error: 'User search failed', 
+            details: error.response?.data?.error || error.message 
+        });
+    }
+});
+
+// Get users by emails (for team groups)
+app.post('/api/users/by-emails', validateBootstrapToken, async (req, res) => {
+    try {
+        const { emails } = req.body;
+        
+        if (!emails || !Array.isArray(emails) || emails.length === 0) {
+            return res.json({ users: [] });
+        }
+
+        // Get access token for Microsoft Graph
+        const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+            { scopes: ['https://graph.microsoft.com/User.Read.All'] },
+            { 
+                headers: { 
+                    'Authorization': `Bearer ${req.bootstrapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const accessToken = tokenResponse.data.accessToken;
+        
+        // Get users by their emails
+        const users = [];
+        for (const email of emails.slice(0, 20)) { // Limit to 20 users to avoid rate limits
+            try {
+                const graphResponse = await axios.get(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(email)}?$select=id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation`, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                users.push(graphResponse.data);
+            } catch (userError) {
+                console.warn(`User not found or inaccessible: ${email}`, userError.response?.status);
+                // Continue with other users
+            }
+        }
+
+        res.json({ users });
+
+    } catch (error) {
+        console.error('Get users by emails error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get users by emails', 
+            details: error.response?.data?.error || error.message 
+        });
+    }
+});
+
+// Get free/busy data for multiple users
+app.post('/api/calendar/freebusy', validateBootstrapToken, async (req, res) => {
+    try {
+        const { emails, startTime, endTime } = req.body;
+        
+        if (!emails || !Array.isArray(emails) || emails.length === 0) {
+            return res.json({ freeBusyData: [] });
+        }
+
+        if (!startTime || !endTime) {
+            return res.status(400).json({ error: 'startTime and endTime are required' });
+        }
+
+        // Get access token for Microsoft Graph
+        const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+            { scopes: ['https://graph.microsoft.com/Calendars.Read'] },
+            { 
+                headers: { 
+                    'Authorization': `Bearer ${req.bootstrapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const accessToken = tokenResponse.data.accessToken;
+
+        // Prepare the request for Microsoft Graph getSchedule
+        const scheduleRequest = {
+            schedules: emails.slice(0, 20), // Limit to 20 users
+            startTime: {
+                dateTime: startTime,
+                timeZone: 'UTC'
+            },
+            endTime: {
+                dateTime: endTime,
+                timeZone: 'UTC'
+            },
+            availabilityViewInterval: 60 // 60 minutes
+        };
+
+        const graphResponse = await axios.post('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', scheduleRequest, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        // Transform the response to match frontend expectations
+        const freeBusyData = graphResponse.data.value.map((schedule, index) => ({
+            email: emails[index],
+            freeBusy: schedule.busyViewEntries?.map(entry => ({
+                start: entry.start,
+                end: entry.end,
+                status: entry.status === '2' ? 'busy' : 'free' // Graph returns status as string numbers
+            })) || [],
+            availabilityView: schedule.availabilityView || []
+        }));
+
+        res.json({ freeBusyData });
+
+    } catch (error) {
+        console.error('Free/busy data error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get free/busy data', 
+            details: error.response?.data?.error || error.message 
+        });
+    }
+});
+
+
 // Error handling middleware
 app.use((error, req, res, next) => {
     console.error('Server error:', error);
