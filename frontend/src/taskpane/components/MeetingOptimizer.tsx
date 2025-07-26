@@ -25,6 +25,7 @@ import {
 } from "@fluentui/react-icons";
 import { authService } from "../services/authService";
 import { AttendeeSelector, Attendee, getAttendeeEmail } from "./attendees";
+import AvailabilityManager from "./AvailabilityManager";
 
 interface MeetingOptimizerProps {
   userProfile: any;
@@ -87,6 +88,7 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<any>(null);
 
   const handleOptimizeMeeting = async () => {
     if (attendees.length === 0) {
@@ -101,10 +103,10 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
       // Convert attendees to email array for backend API
       const attendeeEmails = attendees.map(getAttendeeEmail);
       
-      const result = await authService.optimizeMeeting(
-        attendeeEmails, 
-        parseInt(duration) || 60
-      );
+      // Use selected time slot if available, otherwise optimize
+      const result = selectedTimeSlot 
+        ? { optimizedSuggestions: [selectedTimeSlot], attendees: attendeeEmails, duration: parseInt(duration) || 60 }
+        : await authService.optimizeMeeting(attendeeEmails, parseInt(duration) || 60);
       
       setOptimizationResult(result);
     } catch (error: any) {
@@ -196,6 +198,15 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
           </Button>
         </div>
       </Card>
+
+      {/* Availability Display */}
+      {attendees.length > 0 && (
+        <AvailabilityManager
+          attendees={attendees}
+          duration={parseInt(duration) || 60}
+          onSlotSelect={setSelectedTimeSlot}
+        />
+      )}
 
       {/* Optimization Results */}
       {optimizationResult && (

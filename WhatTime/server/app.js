@@ -79,8 +79,10 @@ app.post('/api/auth/token', validateBootstrapToken, async (req, res) => {
     try {
         const { scopes } = req.body;
         const defaultScopes = [
-            'https://graph.microsoft.com/Calendars.Read',
+            'https://graph.microsoft.com/Calendars.ReadWrite',
+            'https://graph.microsoft.com/Calendars.Read.Shared',
             'https://graph.microsoft.com/User.Read',
+            'https://graph.microsoft.com/User.Read.All',
             'https://graph.microsoft.com/email',
             'https://graph.microsoft.com/openid',
             'https://graph.microsoft.com/profile',
@@ -138,7 +140,7 @@ app.get('/api/calendar/events', validateBootstrapToken, async (req, res) => {
     try {
         // Get access token for Microsoft Graph
         const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
-            { scopes: ['https://graph.microsoft.com/Calendars.Read'] },
+            { scopes: ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Calendars.Read.Shared'] },
             { 
                 headers: { 
                     'Authorization': `Bearer ${req.bootstrapToken}`,
@@ -390,7 +392,7 @@ app.post('/api/calendar/freebusy', validateBootstrapToken, async (req, res) => {
 
         // Get access token for Microsoft Graph
         const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
-            { scopes: ['https://graph.microsoft.com/Calendars.Read'] },
+            { scopes: ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Calendars.Read.Shared'] },
             { 
                 headers: { 
                     'Authorization': `Bearer ${req.bootstrapToken}`,
@@ -443,6 +445,341 @@ app.post('/api/calendar/freebusy', validateBootstrapToken, async (req, res) => {
         });
     }
 });
+
+// Advanced availability analysis endpoint
+app.post('/api/calendar/availability', validateBootstrapToken, async (req, res) => {
+    try {
+        const { attendees, startTime, endTime, duration, timeZone = 'UTC' } = req.body;
+        
+        if (!attendees || !Array.isArray(attendees) || attendees.length === 0) {
+            return res.status(400).json({ error: 'attendees array is required' });
+        }
+
+        if (!startTime || !endTime) {
+            return res.status(400).json({ error: 'startTime and endTime are required' });
+        }
+
+        if (!duration || duration < 15) {
+            return res.status(400).json({ error: 'duration must be at least 15 minutes' });
+        }
+
+        // Get access token for Microsoft Graph
+        const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+            { scopes: ['https://graph.microsoft.com/Calendars.ReadWrite', 'https://graph.microsoft.com/Calendars.Read.Shared'] },
+            { 
+                headers: { 
+                    'Authorization': `Bearer ${req.bootstrapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const accessToken = tokenResponse.data.accessToken;
+
+        // Get current user's domain to determine internal attendees
+        const userProfileResponse = await axios.get('https://graph.microsoft.com/v1.0/me', {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const currentUserDomain = userProfileResponse.data.mail ? userProfileResponse.data.mail.split('@')[1] : null;
+        console.log('Current user domain:', currentUserDomain);
+
+        // Separate internal and external attendees based on domain
+        const internalAttendees = [];
+        const externalAttendees = [];
+
+        for (const email of attendees) {
+            const attendeeDomain = email.split('@')[1];
+            
+            // Internal if same domain as current user, external otherwise
+            if (currentUserDomain && attendeeDomain === currentUserDomain) {
+                internalAttendees.push(email);
+            } else {
+                externalAttendees.push(email);
+            }
+        }
+
+        console.log('Internal attendees:', internalAttendees);
+        console.log('External attendees:', externalAttendees);
+        const attendeesAvailability = [];
+
+        // Get availability for internal attendees using Microsoft Graph
+        if (internalAttendees.length > 0) {
+            try {
+                console.log('Requesting schedule for internal attendees:', internalAttendees);
+                
+                const scheduleRequest = {
+                    schedules: internalAttendees.slice(0, 20), // Limit to 20 users
+                    startTime: {
+                        dateTime: startTime,
+                        timeZone: timeZone
+                    },
+                    endTime: {
+                        dateTime: endTime,
+                        timeZone: timeZone
+                    },
+                    availabilityViewInterval: 15 // 15 minutes for better granularity
+                };
+
+                console.log('Schedule request:', JSON.stringify(scheduleRequest, null, 2));
+
+                const graphResponse = await axios.post('https://graph.microsoft.com/v1.0/me/calendar/getSchedule', scheduleRequest, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                console.log('Graph response received:', graphResponse.data);
+
+                // Process internal attendees' availability
+                graphResponse.data.value.forEach((schedule, index) => {
+                    const email = internalAttendees[index];
+                    const freeBusyTimes = [];
+                    
+                    console.log(`Processing schedule for ${email}:`, schedule);
+                    
+                    // Convert availability view to free/busy times
+                    // availabilityView is a string where each character represents a 15-minute interval
+                    if (schedule.availabilityView && typeof schedule.availabilityView === 'string' && schedule.availabilityView.length > 0) {
+                        const startDateTime = new Date(startTime);
+                        let hasAnyBusyTime = false;
+                        
+                        // Convert string to array of characters and process each interval
+                        for (let intervalIndex = 0; intervalIndex < schedule.availabilityView.length; intervalIndex++) {
+                            const status = schedule.availabilityView[intervalIndex];
+                            
+                            if (status !== '0') { // 0 = free, 1 = tentative, 2 = busy, 3 = oof, 4 = working elsewhere
+                                hasAnyBusyTime = true;
+                                const intervalStart = new Date(startDateTime.getTime() + intervalIndex * 15 * 60 * 1000);
+                                const intervalEnd = new Date(intervalStart.getTime() + 15 * 60 * 1000);
+                                
+                                freeBusyTimes.push({
+                                    start: intervalStart.toISOString(),
+                                    end: intervalEnd.toISOString()
+                                });
+                                
+                            const londonStart = new Date(intervalStart.toLocaleString("en-US", {timeZone: "Europe/London"}));
+                            const londonEnd = new Date(intervalEnd.toLocaleString("en-US", {timeZone: "Europe/London"}));
+                            console.log(`${email} - Busy interval ${intervalIndex}: 
+                            UTC: ${intervalStart.toISOString()} - ${intervalEnd.toISOString()}
+                            London: ${intervalStart.toLocaleString("en-GB", {timeZone: "Europe/London"})} - ${intervalEnd.toLocaleString("en-GB", {timeZone: "Europe/London"})}
+                            (status: ${status})`);
+                            }
+                        }
+                        
+                        console.log(`${email} - Found ${freeBusyTimes.length} busy periods out of ${schedule.availabilityView.length} intervals, hasAnyBusyTime: ${hasAnyBusyTime}`);
+                        console.log(`${email} - Sample availability string: "${schedule.availabilityView.substring(0, 50)}..."`);
+                    } else {
+                        console.log(`${email} - No availability view data received or invalid format`);
+                    }
+
+                    // Map status codes to readable format
+                    const getFreeBusyViewType = (availabilityView) => {
+                        if (!availabilityView || typeof availabilityView !== 'string' || availabilityView.length === 0) {
+                            console.log(`${email} - No availability view, marking as unknown`);
+                            return 'unknown';
+                        }
+                        
+                        // Count occurrences of each status (string characters)
+                        const statusCounts = {};
+                        for (let i = 0; i < availabilityView.length; i++) {
+                            const status = availabilityView[i];
+                            statusCounts[status] = (statusCounts[status] || 0) + 1;
+                        }
+
+                        console.log(`${email} - Status counts:`, statusCounts);
+
+                        // Return most common status
+                        const dominantStatus = Object.keys(statusCounts).reduce((a, b) => 
+                            statusCounts[a] > statusCounts[b] ? a : b
+                        );
+
+                        const statusMap = {
+                            '0': 'free',
+                            '1': 'tentative', 
+                            '2': 'busy',
+                            '3': 'oof',
+                            '4': 'workingElsewhere'
+                        };
+
+                        const result = statusMap[dominantStatus] || 'unknown';
+                        console.log(`${email} - Dominant status: ${dominantStatus} -> ${result}`);
+                        return result;
+                    };
+
+                    attendeesAvailability.push({
+                        email,
+                        displayName: email.split('@')[0], // Fallback display name
+                        isExternal: false,
+                        freeBusyViewType: getFreeBusyViewType(schedule.availabilityView),
+                        freeBusyTimes
+                    });
+                });
+
+            } catch (graphError) {
+                console.error('Graph API error for internal attendees:', graphError.response?.data || graphError.message);
+                
+                // Add internal attendees with error status - DON'T default to available
+                internalAttendees.forEach(email => {
+                    attendeesAvailability.push({
+                        email,
+                        displayName: email.split('@')[0],
+                        isExternal: false,
+                        freeBusyViewType: 'unknown',
+                        freeBusyTimes: [],
+                        error: `Calendar access denied: ${graphError.response?.data?.error?.message || graphError.message}`
+                    });
+                });
+            }
+        }
+
+        // Handle external attendees (limited availability data)
+        externalAttendees.forEach(email => {
+            attendeesAvailability.push({
+                email,
+                displayName: email.split('@')[0],
+                isExternal: true,
+                freeBusyViewType: 'unknown',
+                freeBusyTimes: [],
+                error: 'External attendee - limited calendar access'
+            });
+        });
+
+        // Generate suggested time slots
+        const suggestedSlots = generateTimeSlots(startTime, endTime, duration, attendeesAvailability);
+
+        const response = {
+            attendeesAvailability,
+            suggestedSlots,
+            timeRange: {
+                start: startTime,
+                end: endTime,
+                timeZone
+            }
+        };
+
+        console.log('Final availability response:', JSON.stringify(response, null, 2));
+        res.json(response);
+
+    } catch (error) {
+        console.error('Availability analysis error:', error);
+        res.status(500).json({ 
+            error: 'Failed to analyze availability', 
+            details: error.response?.data?.error || error.message 
+        });
+    }
+});
+
+// Helper function to generate time slots with availability analysis
+function generateTimeSlots(startTime, endTime, duration, attendeesAvailability) {
+    const slots = [];
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    const durationMs = duration * 60 * 1000;
+    
+    // Generate slots every 30 minutes during business hours (9 AM - 6 PM)
+    const current = new Date(start);
+    
+    while (current.getTime() + durationMs <= end.getTime()) {
+        // Skip non-business hours (before 9 AM or after 6 PM)
+        const hour = current.getHours();
+        if (hour < 9 || hour >= 18) {
+            current.setTime(current.getTime() + 30 * 60 * 1000); // Move 30 minutes
+            continue;
+        }
+
+        // Skip weekends
+        const dayOfWeek = current.getDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) {
+            current.setDate(current.getDate() + 1);
+            current.setHours(9, 0, 0, 0); // Reset to 9 AM of next day
+            continue;
+        }
+
+        const slotStart = new Date(current);
+        const slotEnd = new Date(current.getTime() + durationMs);
+        
+        // Analyze availability for this slot
+        const analysis = analyzeSlotAvailability(slotStart, slotEnd, attendeesAvailability);
+        
+        if (analysis.isAvailable || analysis.conflictCount < attendeesAvailability.length) {
+            slots.push({
+                start: slotStart.toISOString(),
+                end: slotEnd.toISOString(),
+                isAvailable: analysis.isAvailable,
+                conflictCount: analysis.conflictCount,
+                attendeesAvailable: analysis.attendeesAvailable,
+                attendeesConflict: analysis.attendeesConflict,
+                confidence: analysis.confidence
+            });
+        }
+
+        current.setTime(current.getTime() + 30 * 60 * 1000); // Move 30 minutes
+    }
+
+    // Sort by confidence score (highest first) and return top 10
+    return slots
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 10);
+}
+
+// Helper function to analyze availability for a specific time slot
+function analyzeSlotAvailability(slotStart, slotEnd, attendeesAvailability) {
+    const attendeesAvailable = [];
+    const attendeesConflict = [];
+    let conflictCount = 0;
+
+    attendeesAvailability.forEach(attendee => {
+        let hasConflict = false;
+
+        // Check if attendee has any conflicts during this slot
+        if (attendee.freeBusyTimes && attendee.freeBusyTimes.length > 0) {
+            hasConflict = attendee.freeBusyTimes.some(busyTime => {
+                const busyStart = new Date(busyTime.start);
+                const busyEnd = new Date(busyTime.end);
+                
+                // Check for overlap
+                return (slotStart < busyEnd && slotEnd > busyStart);
+            });
+        }
+
+        if (hasConflict) {
+            attendeesConflict.push(attendee.email);
+            conflictCount++;
+        } else {
+            attendeesAvailable.push(attendee.email);
+        }
+    });
+
+    // Calculate confidence score
+    const totalAttendees = attendeesAvailability.length;
+    const availableCount = totalAttendees - conflictCount;
+    let confidence = totalAttendees > 0 ? Math.round((availableCount / totalAttendees) * 100) : 0;
+
+    // Boost confidence for external attendees (unknown availability)
+    const externalCount = attendeesAvailability.filter(a => a.isExternal).length;
+    if (externalCount > 0 && conflictCount === 0) {
+        confidence = Math.min(confidence + 10, 100); // Small boost for external attendees
+    }
+
+    // Boost confidence for prime meeting times (10 AM - 4 PM)
+    const hour = slotStart.getHours();
+    if (hour >= 10 && hour <= 16) {
+        confidence = Math.min(confidence + 5, 100);
+    }
+
+    return {
+        isAvailable: conflictCount === 0,
+        conflictCount,
+        attendeesAvailable,
+        attendeesConflict,
+        confidence
+    };
+}
 
 
 // Error handling middleware

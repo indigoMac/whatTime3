@@ -88,8 +88,10 @@ class AuthService {
         },
         body: JSON.stringify({
           scopes: [
-            'https://graph.microsoft.com/Calendars.Read',
+            'https://graph.microsoft.com/Calendars.ReadWrite',
+            'https://graph.microsoft.com/Calendars.Read.Shared',
             'https://graph.microsoft.com/User.Read',
+            'https://graph.microsoft.com/User.Read.All',
             'https://graph.microsoft.com/email',
             'https://graph.microsoft.com/openid',
             'https://graph.microsoft.com/profile'
@@ -311,6 +313,48 @@ class AuthService {
       return await response.json();
     } catch (error) {
       console.error('Failed to get free/busy data:', error);
+      throw error;
+    }
+  }
+
+  async getDetailedAvailability(
+    attendees: string[], 
+    duration: number, 
+    startDate?: Date, 
+    endDate?: Date
+  ): Promise<any> {
+    if (!this.bootstrapToken) {
+      throw new Error('Not authenticated');
+    }
+
+    // Default to next 7 days if not specified
+    const start = startDate || new Date();
+    const end = endDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/calendar/availability`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.bootstrapToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          attendees,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          duration,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`Failed to get availability: ${errorData.error}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to get detailed availability:', error);
       throw error;
     }
   }
