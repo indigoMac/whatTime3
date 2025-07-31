@@ -26,6 +26,7 @@ interface AvailabilityManagerProps {
   attendees: Attendee[];
   duration: number;
   onSlotSelect?: (slot: any) => void;
+  constraints?: any;
 }
 
 const useStyles = makeStyles({
@@ -58,7 +59,8 @@ type ViewMode = 'list' | 'calendar';
 const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({
   attendees,
   duration,
-  onSlotSelect
+  onSlotSelect,
+  constraints
 }) => {
   const styles = useStyles();
   const [availabilityData, setAvailabilityData] = useState<AvailabilityResponse | null>(null);
@@ -71,7 +73,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({
     if (attendees.length > 0) {
       fetchAvailability();
     }
-  }, [attendees, duration]);
+  }, [attendees, duration, constraints]);
 
   const fetchAvailability = async () => {
     try {
@@ -79,9 +81,21 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({
       setError(null);
       
       const attendeeEmails = attendees.map(getAttendeeEmail);
+      
+      // Use constraints to determine date range, or default to next 7 days
+      let startDate = new Date();
+      let endDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      if (constraints?.dateRange) {
+        startDate = new Date(constraints.dateRange.start);
+        endDate = new Date(constraints.dateRange.end);
+      }
+      
       const data = await authService.getDetailedAvailability(
         attendeeEmails,
-        duration
+        duration,
+        startDate,
+        endDate
       );
       
       setAvailabilityData(data);

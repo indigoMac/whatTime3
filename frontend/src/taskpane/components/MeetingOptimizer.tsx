@@ -26,6 +26,7 @@ import {
 import { authService } from "../services/authService";
 import { AttendeeSelector, Attendee, getAttendeeEmail } from "./attendees";
 import AvailabilityManager from "./AvailabilityManager";
+import MeetingConstraints from "./MeetingConstraints";
 
 interface MeetingOptimizerProps {
   userProfile: any;
@@ -89,6 +90,7 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<any>(null);
+  const [meetingConstraints, setMeetingConstraints] = useState<any>(null);
 
   const handleOptimizeMeeting = async () => {
     if (attendees.length === 0) {
@@ -199,12 +201,16 @@ const MeetingOptimizer: React.FC<MeetingOptimizerProps> = ({ userProfile: _ }) =
         </div>
       </Card>
 
+      {/* Meeting Constraints */}
+      <MeetingConstraints onConstraintsChange={setMeetingConstraints} />
+
       {/* Availability Display */}
       {attendees.length > 0 && (
         <AvailabilityManager
           attendees={attendees}
           duration={parseInt(duration) || 60}
           onSlotSelect={setSelectedTimeSlot}
+          constraints={meetingConstraints}
         />
       )}
 

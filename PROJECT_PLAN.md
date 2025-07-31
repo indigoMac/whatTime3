@@ -29,9 +29,9 @@ Meeting Optimizer is a professional Outlook add-in designed to streamline the pr
 - [x] Add attendees (internal/external)
 - [x] Show available times (list + basic calendar view)
 - [x] Suggest optimal times (simple scoring, time zone handling)
+- [ ] Professional React UI (reuse/extend example components)
 - [ ] Auto-create invites
 - [ ] Track responses (RSVP status)
-- [ ] Professional React UI (reuse/extend example components)
 
 ### **Phase 2: Power Features**
 - [ ] Team/role-based quick meetings (e.g., "legal", "managers")

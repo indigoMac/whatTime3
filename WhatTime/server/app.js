@@ -449,7 +449,7 @@ app.post('/api/calendar/freebusy', validateBootstrapToken, async (req, res) => {
 // Advanced availability analysis endpoint
 app.post('/api/calendar/availability', validateBootstrapToken, async (req, res) => {
     try {
-        const { attendees, startTime, endTime, duration, timeZone = 'UTC' } = req.body;
+        const { attendees, startTime, endTime, duration, timeZone = 'UTC', constraints } = req.body;
         
         if (!attendees || !Array.isArray(attendees) || attendees.length === 0) {
             return res.status(400).json({ error: 'attendees array is required' });
@@ -650,7 +650,7 @@ app.post('/api/calendar/availability', validateBootstrapToken, async (req, res) 
         });
 
         // Generate suggested time slots
-        const suggestedSlots = generateTimeSlots(startTime, endTime, duration, attendeesAvailability);
+        const suggestedSlots = generateTimeSlots(startTime, endTime, duration, attendeesAvailability, constraints);
 
         const response = {
             attendeesAvailability,
@@ -675,13 +675,44 @@ app.post('/api/calendar/availability', validateBootstrapToken, async (req, res) 
 });
 
 // Helper function to generate time slots with availability analysis
-function generateTimeSlots(startTime, endTime, duration, attendeesAvailability) {
+function generateTimeSlots(startTime, endTime, duration, attendeesAvailability, constraints) {
     const slots = [];
     const start = new Date(startTime);
     const end = new Date(endTime);
     const durationMs = duration * 60 * 1000;
     
-    // Generate slots every 30 minutes during business hours (9 AM - 6 PM)
+    // First, check specific time options if provided
+    if (constraints?.specificTimeOptions && constraints.specificTimeOptions.length > 0) {
+        console.log('Checking specific time options:', constraints.specificTimeOptions);
+        
+        for (const timeOption of constraints.specificTimeOptions) {
+            // Parse the specific time option
+            const optionDate = new Date(timeOption.date);
+            const [startHour, startMinute] = timeOption.startTime.split(':').map(Number);
+            const [endHour, endMinute] = timeOption.endTime.split(':').map(Number);
+            
+            const slotStart = new Date(optionDate);
+            slotStart.setHours(startHour, startMinute, 0, 0);
+            
+            const slotEnd = new Date(optionDate);
+            slotEnd.setHours(endHour, endMinute, 0, 0);
+            
+            // Analyze availability for this specific slot
+            const analysis = analyzeSlotAvailability(slotStart, slotEnd, attendeesAvailability);
+            
+            slots.push({
+                start: slotStart.toISOString(),
+                end: slotEnd.toISOString(),
+                isAvailable: analysis.isAvailable,
+                conflictCount: analysis.conflictCount,
+                attendeesAvailable: analysis.attendeesAvailable,
+                attendeesConflict: analysis.attendeesConflict,
+                confidence: analysis.confidence + 20 // Boost confidence for specific suggestions
+            });
+        }
+    }
+    
+    // Generate additional slots every 30 minutes during business hours (9 AM - 6 PM)
     const current = new Date(start);
     
     while (current.getTime() + durationMs <= end.getTime()) {
@@ -690,6 +721,21 @@ function generateTimeSlots(startTime, endTime, duration, attendeesAvailability) 
         if (hour < 9 || hour >= 18) {
             current.setTime(current.getTime() + 30 * 60 * 1000); // Move 30 minutes
             continue;
+        }
+
+        // Check if this time fits preferred time windows (if specified)
+        if (constraints?.preferredTimes && constraints.preferredTimes.length > 0) {
+            const enabledPreferences = constraints.preferredTimes.filter(p => p.enabled);
+            if (enabledPreferences.length > 0) {
+                const isInPreferredWindow = enabledPreferences.some(pref => 
+                    hour >= pref.startHour && hour < pref.endHour
+                );
+                
+                if (!isInPreferredWindow) {
+                    current.setTime(current.getTime() + 30 * 60 * 1000); // Move 30 minutes
+                    continue;
+                }
+            }
         }
 
         // Skip weekends
@@ -707,6 +753,19 @@ function generateTimeSlots(startTime, endTime, duration, attendeesAvailability) 
         const analysis = analyzeSlotAvailability(slotStart, slotEnd, attendeesAvailability);
         
         if (analysis.isAvailable || analysis.conflictCount < attendeesAvailability.length) {
+            let confidence = analysis.confidence;
+            
+            // Boost confidence if in preferred time window
+            if (constraints?.preferredTimes && constraints.preferredTimes.length > 0) {
+                const enabledPreferences = constraints.preferredTimes.filter(p => p.enabled);
+                const isInPreferredWindow = enabledPreferences.some(pref => 
+                    slotStart.getHours() >= pref.startHour && slotStart.getHours() < pref.endHour
+                );
+                if (isInPreferredWindow) {
+                    confidence = Math.min(confidence + 15, 100); // Boost for preferred times
+                }
+            }
+            
             slots.push({
                 start: slotStart.toISOString(),
                 end: slotEnd.toISOString(),
@@ -714,7 +773,7 @@ function generateTimeSlots(startTime, endTime, duration, attendeesAvailability) 
                 conflictCount: analysis.conflictCount,
                 attendeesAvailable: analysis.attendeesAvailable,
                 attendeesConflict: analysis.attendeesConflict,
-                confidence: analysis.confidence
+                confidence: confidence
             });
         }
 
