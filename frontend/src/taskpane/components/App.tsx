@@ -1,22 +1,12 @@
-import * as React from "react";
-import { useState, useEffect } from "react";
-import Header from "./Header";
-import MeetingOptimizer from "./MeetingOptimizer";
+import React, { useState, useEffect } from "react";
+import { Clock } from "lucide-react";
+import { MeetingOptimizerSidebar } from "./MeetingOptimizerSidebar";
 import AuthenticationManager from "./AuthenticationManager";
-import { makeStyles } from "@fluentui/react-components";
 import { authService } from "../services/authService";
 
 interface AppProps {
   title: string;
 }
-
-const useStyles = makeStyles({
-  root: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-  },
-});
 
 interface UserProfile {
   displayName: string;
@@ -25,7 +15,6 @@ interface UserProfile {
 }
 
 const App: React.FC<AppProps> = (props: AppProps) => {
-  const styles = useStyles();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,28 +54,42 @@ const App: React.FC<AppProps> = (props: AppProps) => {
 
   if (isLoading) {
     return (
-      <div className={styles.root}>
-        <Header logo="assets/logo-filled.png" title={props.title} message="Loading..." />
-        <div style={{ padding: '20px', textAlign: 'center' }}>
-          <p>Initializing Meeting Optimizer...</p>
+      <div className="flex flex-col h-screen bg-background text-foreground">
+        <div className="flex items-center justify-between p-4 border-b">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary" />
+            <h1 className="text-lg font-semibold">{props.title}</h1>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <Clock className="h-8 w-8 animate-spin mx-auto text-primary mb-4" />
+            <p className="text-sm text-muted-foreground">Initializing Meeting Optimizer...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col h-screen bg-background text-foreground">
+        <div className="flex items-center justify-between p-4 border-b">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary" />
+            <h1 className="text-lg font-semibold">{props.title}</h1>
+          </div>
+        </div>
+        <div className="flex-1">
+          <AuthenticationManager onAuthSuccess={handleAuthSuccess} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className={styles.root}>
-      <Header 
-        logo="assets/logo-filled.png" 
-        title={props.title} 
-        message={userProfile ? `Welcome, \n${userProfile.displayName}` : "Welcome"} 
-      />
-      
-      {!isAuthenticated ? (
-        <AuthenticationManager onAuthSuccess={handleAuthSuccess} />
-      ) : (
-        <MeetingOptimizer userProfile={userProfile} />
-      )}
+    <div className="h-screen bg-background text-foreground">
+      <MeetingOptimizerSidebar userProfile={userProfile} />
     </div>
   );
 };

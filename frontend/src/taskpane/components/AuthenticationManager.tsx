@@ -1,165 +1,84 @@
-import * as React from "react";
-import { useState } from "react";
-import { 
-  Button, 
-  Card, 
-  CardHeader, 
-  CardPreview,
-  Text,
-  Body1,
-  Caption1,
-  makeStyles,
-  Spinner
-} from "@fluentui/react-components";
-import { 
-  PersonAccounts24Regular, 
-  LockClosed24Regular,
-  CheckmarkCircle24Regular 
-} from "@fluentui/react-icons";
+import React, { useState } from "react";
+import { LogIn, Shield, AlertCircle } from "lucide-react";
+import { Button } from "./ui/button";
 import { authService } from "../services/authService";
 
 interface AuthenticationManagerProps {
   onAuthSuccess: () => void;
 }
 
-const useStyles = makeStyles({
-  container: {
-    padding: "20px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: "20px",
-  },
-  card: {
-    maxWidth: "400px",
-    width: "100%",
-  },
-  cardContent: {
-    padding: "20px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "16px",
-    alignItems: "center",
-    textAlign: "center",
-  },
-  icon: {
-    fontSize: "48px",
-    color: "#0078d4",
-  },
-  errorCard: {
-    border: "1px solid #ef4444",
-  },
-  successCard: {
-    border: "1px solid #06b6d4",
-  },
-});
-
 const AuthenticationManager: React.FC<AuthenticationManagerProps> = ({ onAuthSuccess }) => {
-  const styles = useStyles();
-  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isSuccess, setIsSuccess] = useState<boolean>(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const handleSignIn = async () => {
     try {
-      setIsSigningIn(true);
-      setError(null);
+      setIsAuthenticating(true);
+      setAuthError(null);
       
       const success = await authService.initialize();
-      
       if (success) {
-        setIsSuccess(true);
-        setTimeout(() => {
-          onAuthSuccess();
-        }, 1000);
+        onAuthSuccess();
       } else {
-        setError("Authentication failed. Please try again.");
+        setAuthError('Authentication failed. Please try again.');
       }
-    } catch (error: any) {
-      console.error("Sign-in failed:", error);
-      setError(error.message || "Sign-in failed. Please try again.");
+    } catch (error) {
+      console.error('Authentication error:', error);
+      setAuthError('Authentication failed. Please check your connection and try again.');
     } finally {
-      setIsSigningIn(false);
+      setIsAuthenticating(false);
     }
   };
 
-  if (isSuccess) {
-    return (
-      <div className={styles.container}>
-        <Card className={`${styles.card} ${styles.successCard}`}>
-          <CardHeader
-            image={<CheckmarkCircle24Regular className={styles.icon} />}
-            header={<Text weight="semibold">Authentication Successful!</Text>}
-            description={<Caption1>Loading Meeting Optimizer...</Caption1>}
-          />
-          <div className={styles.cardContent}>
-            <Spinner size="medium" />
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.container}>
-        <Card className={`${styles.card} ${styles.errorCard}`}>
-          <CardHeader
-            image={<LockClosed24Regular className={styles.icon} />}
-            header={<Text weight="semibold">Authentication Error</Text>}
-            description={<Caption1>{error}</Caption1>}
-          />
-          <div className={styles.cardContent}>
-            <Button 
-              appearance="primary" 
-              onClick={handleSignIn}
-              disabled={isSigningIn}
-            >
-              Try Again
-            </Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
   return (
-    <div className={styles.container}>
-      <Card className={styles.card}>
-        <CardPreview>
-          <div style={{ padding: "40px", textAlign: "center" }}>
-            <PersonAccounts24Regular className={styles.icon} />
+    <div className="flex flex-col items-center justify-center h-full p-6 space-y-6">
+      <div className="text-center space-y-4">
+        <div className="flex justify-center">
+          <div className="p-4 bg-primary/10 rounded-full">
+            <Shield className="h-12 w-12 text-primary" />
           </div>
-        </CardPreview>
-        <CardHeader
-          header={<Text weight="semibold">Sign in to Microsoft 365</Text>}
-          description={
-            <Caption1>
-              Connect your Microsoft 365 account to access calendar data and optimize your meetings.
-            </Caption1>
-          }
-        />
-        <div className={styles.cardContent}>
-          <Body1>
-            Meeting Optimizer needs to access your calendar to:
-          </Body1>
-          <ul style={{ textAlign: "left", margin: 0, paddingLeft: "20px" }}>
-            <li>View your availability</li>
-            <li>Analyze meeting conflicts</li>
-            <li>Suggest optimal meeting times</li>
-            <li>Create meeting invitations</li>
-          </ul>
-          <Button 
-            appearance="primary" 
-            size="large"
-            onClick={handleSignIn}
-            disabled={isSigningIn}
-            icon={isSigningIn ? <Spinner size="tiny" /> : undefined}
-          >
-            {isSigningIn ? "Signing In..." : "Sign In with Microsoft 365"}
-          </Button>
         </div>
-      </Card>
+        
+        <div className="space-y-2">
+          <h2 className="text-xl font-semibold">Sign in to continue</h2>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Meeting Optimizer requires access to your Microsoft 365 account to check calendars and optimize meeting times.
+          </p>
+        </div>
+      </div>
+
+      {authError && (
+        <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-md max-w-sm">
+          <AlertCircle className="h-4 w-4 text-destructive mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-destructive">{authError}</div>
+        </div>
+      )}
+
+      <div className="space-y-4 w-full max-w-sm">
+        <Button 
+          onClick={handleSignIn} 
+          disabled={isAuthenticating}
+          className="w-full"
+          size="lg"
+        >
+          {isAuthenticating ? (
+            <>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+              Signing in...
+            </>
+          ) : (
+            <>
+              <LogIn className="h-4 w-4 mr-2" />
+              Sign in with Microsoft
+            </>
+          )}
+        </Button>
+        
+        <div className="text-xs text-muted-foreground text-center space-y-1">
+          <p>We use enterprise-grade security to protect your data.</p>
+          <p>Your calendar details remain private and secure.</p>
+        </div>
+      </div>
     </div>
   );
 };
