@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Clock, Users, X, Video, Plus, Trash2 } from "lucide-react";
+import { Users, X, Video, Plus, Trash2, Eye, Send } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
@@ -122,8 +122,7 @@ Error: ${error.message || 'Unknown error'}`;
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b flex-shrink-0">
         <div className="flex items-center gap-2">
-          <Clock className="h-5 w-5 text-primary" />
-          <h1 className="text-base font-semibold">Meeting Optimizer</h1>
+          {/* Logo space - will be handled by Outlook's manifest icons */}
         </div>
         {onClose && (
           <Button variant="ghost" size="icon" onClick={onClose}>
@@ -288,19 +287,43 @@ Error: ${error.message || 'Unknown error'}`;
             onParticipantsChange={setParticipants} 
           />
 
-          <div className="pt-4">
+          <div className="pt-4 flex gap-2">
             <Button 
-              className="w-full" 
+              variant="outline"
+              className="flex-1 min-w-0" 
+              size="sm"
+              onClick={() => {
+                // Preview email functionality - to be implemented
+                console.log("Preview email clicked");
+              }}
+              disabled={isProcessing || participants.length === 0}
+            >
+              <Eye className="h-3 w-3 mr-1" />
+              <span className="truncate">
+                {participants.length === 0 ? (
+                  "Add people"
+                ) : (
+                  "Preview"
+                )}
+              </span>
+            </Button>
+            
+            <Button 
+              className="flex-1 min-w-0" 
+              size="sm"
               onClick={handleSendMeetingRequest}
               disabled={isProcessing || participants.length === 0}
             >
-              {isProcessing ? (
-                "Optimizing meeting times..."
-              ) : participants.length === 0 ? (
-                "Add participants to continue"
-              ) : (
-                `Find optimal times for ${participants.length} participants`
-              )}
+              <Send className="h-3 w-3 mr-1" />
+              <span className="truncate">
+                {isProcessing ? (
+                  "Sending..."
+                ) : participants.length === 0 ? (
+                  "Add people"
+                ) : (
+                  "Send"
+                )}
+              </span>
             </Button>
           </div>
         </TabsContent>
@@ -308,7 +331,7 @@ Error: ${error.message || 'Unknown error'}`;
         {/* Pending Tab - Placeholder for now */}
         <TabsContent value="pending" className="flex-1 overflow-y-auto p-4 m-0 min-h-0">
           <div className="text-center text-muted-foreground">
-            <Clock className="h-8 w-8 mx-auto mb-2" />
+            <Video className="h-8 w-8 mx-auto mb-2" />
             <p>Pending meetings will appear here</p>
             <p className="text-xs">Feature coming in Phase 2</p>
           </div>

@@ -64,7 +64,7 @@ const App: React.FC<AppProps> = (props: AppProps) => {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <Clock className="h-8 w-8 animate-spin mx-auto text-primary mb-4" />
-            <p className="text-sm text-muted-foreground">Initializing Meeting Optimizer...</p>
+            <p className="text-sm text-muted-foreground">Initializing What Time...</p>
           </div>
         </div>
       </div>

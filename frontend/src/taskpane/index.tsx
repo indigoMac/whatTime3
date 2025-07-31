@@ -7,7 +7,7 @@ import "../styles/globals.css";
 
 /* global document, Office, module, require */
 
-const title = "Meeting Optimizer";
+const title = "What Time";
 
 const rootElement: HTMLElement | null = document.getElementById("container");
 const root = rootElement ? createRoot(rootElement) : undefined;

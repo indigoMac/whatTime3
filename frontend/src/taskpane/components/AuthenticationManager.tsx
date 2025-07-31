@@ -42,7 +42,7 @@ const AuthenticationManager: React.FC<AuthenticationManagerProps> = ({ onAuthSuc
         <div className="space-y-2">
           <h2 className="text-xl font-semibold">Sign in to continue</h2>
           <p className="text-sm text-muted-foreground max-w-sm">
-            Meeting Optimizer requires access to your Microsoft 365 account to check calendars and optimize meeting times.
+                          What Time requires access to your Microsoft 365 account to check calendars and optimize meeting times.
           </p>
         </div>
       </div>
