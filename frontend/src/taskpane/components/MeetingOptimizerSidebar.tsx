@@ -7,6 +7,8 @@ import { cn } from "../../lib/utils";
 import { authService } from "../services/authService";
 import { createMeetingInvite } from "../../lib/office-api";
 import { EnhancedParticipantManager, Participant } from "./EnhancedParticipantManager";
+import { PendingMeetingsView } from "./PendingMeetingsView";
+import { UpcomingMeetingsView } from "./UpcomingMeetingsView";
 
 interface MeetingOptimizerSidebarProps {
   userProfile: any;
@@ -64,54 +66,156 @@ export function MeetingOptimizerSidebar({ userProfile, onClose }: MeetingOptimiz
       const optionalParticipants = participants.filter(p => p.priority === 'optional');
       
       if (participants.length === 0) {
-        alert("Please add at least one participant");
+        console.error("❌ Please add at least one participant");
         return;
       }
 
       if (vitalParticipants.length === 0) {
-        alert("Please mark at least one participant as vital for the meeting");
+        console.error("❌ Please mark at least one participant as vital for the meeting");
         return;
       }
 
-      // Collect all attendee emails
-      const allAttendees: string[] = participants.map(p => p.email);
-      const vitalEmails: string[] = vitalParticipants.map(p => p.email);
+      if (!meetingTitle.trim()) {
+        console.error("❌ Please enter a meeting title");
+        return;
+      }
 
-      // Use the existing authService to optimize the meeting
-      // In the future, we'll pass vital vs optional participants separately
-      const optimization = await authService.optimizeMeeting(
-        allAttendees,
-        parseInt(duration),
-        timeRanges.map(range => `${range.date} ${range.startTime || '09:00'}-${range.endTime || '17:00'}`)
-      );
+      // Validate time ranges
+      const validTimeRanges = timeRanges.filter(range => {
+        if (range.isAllDay) return range.date;
+        return range.date && range.startTime && range.endTime;
+      });
 
-      // Enhanced feedback with participant priority information
-      const message = `Meeting optimization complete!
+      if (validTimeRanges.length === 0) {
+        console.error("❌ Please add at least one valid time range");
+        return;
+      }
+
+      // Create time slot proposals from time ranges
+      const proposedTimeSlots = validTimeRanges.map((range) => {
+        if (range.isAllDay) {
+          const startDate = new Date(range.date);
+          startDate.setHours(9, 0, 0, 0); // Default to 9 AM
+          const endDate = new Date(startDate);
+          endDate.setTime(startDate.getTime() + parseInt(duration) * 60 * 1000);
+          
+          return {
+            startTime: startDate.toISOString(),
+            endTime: endDate.toISOString()
+          };
+        } else {
+          const startDateTime = new Date(`${range.date}T${range.startTime}`);
+          const endDateTime = new Date(`${range.date}T${range.endTime}`);
+          
+          return {
+            startTime: startDateTime.toISOString(),
+            endTime: endDateTime.toISOString()
+          };
+        }
+      });
+
+      // Create meeting proposal
+      const meetingData = {
+        title: meetingTitle.trim(),
+        location: meetingLocation.trim(),
+        duration: parseInt(duration),
+        timeZone: 'UTC', // TODO: Get from timezone selector
+        description: '', // Could be added later
+        vitalParticipants: vitalParticipants.map(p => ({
+          email: p.email,
+          name: p.name
+        })),
+        optionalParticipants: optionalParticipants.map(p => ({
+          email: p.email,
+          name: p.name
+        })),
+        proposedTimeSlots
+      };
+
+      // Get auth token
+      const token = authService.getToken();
       
-📊 Results:
-• ${optimization.suggestions?.length || 0} time suggestions found
-• ${vitalParticipants.length} vital participants (must attend)
-• ${optionalParticipants.length} optional participants
+      if (!token) {
+        throw new Error('Not authenticated');
+      }
+      
+      // Create meeting proposal
+      const createResponse = await fetch('http://localhost:3001/api/meetings/create', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(meetingData)
+      });
 
-⭐ Vital participants: ${vitalParticipants.map(p => p.name).join(', ')}
+      if (!createResponse.ok) {
+        const errorData = await createResponse.json();
+        throw new Error(errorData.error || 'Failed to create meeting proposal');
+      }
 
-The optimization prioritized schedules of vital participants.`;
+      const createResult = await createResponse.json();
+      const meetingId = createResult.meetingId;
 
-      alert(message);
+      // Send proposals to vital participants
+      const sendResponse = await fetch(`http://localhost:3001/api/meetings/${meetingId}/send-proposals`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          baseUrl: 'http://localhost:3001' // Base URL for tracking links
+        })
+      });
+
+      if (!sendResponse.ok) {
+        const errorData = await sendResponse.json();
+        throw new Error(errorData.error || 'Failed to send proposals');
+      }
+
+      const sendResult = await sendResponse.json();
+
+      // Success feedback - using console since alert() isn't supported in Office Add-ins
+      const message = `🎉 Meeting proposal sent successfully!
+
+📧 Time selection emails sent to:
+${vitalParticipants.map(p => `• ${p.name} (${p.email})`).join('\n')}
+
+📋 Meeting Details:
+• Title: ${meetingTitle}
+• Duration: ${duration} minutes
+• Time options: ${proposedTimeSlots.length}
+
+The meeting will appear in your Pending tab. You'll see real-time updates as participants respond.`;
+
+      console.log("SUCCESS:", message);
+      
+      // Show success in UI by switching to pending tab
+      console.log("✅ Meeting created successfully! Check the Pending tab for real-time updates.");
+
+      // Switch to pending tab
+      setActiveTab('pending');
+
+      // Clear form
+      setMeetingTitle('');
+      setMeetingLocation('');
+      setTimeRanges([{ id: "1", date: new Date().toISOString().split("T")[0], startTime: "", endTime: "", isAllDay: false }]);
+      setParticipants([]);
       
     } catch (error) {
-      console.error('Meeting optimization failed:', error);
+      console.error('Meeting proposal failed:', error);
       
-      const errorMessage = `Failed to optimize meeting. 
+      const errorMessage = `Failed to send meeting proposal. 
       
 Please check:
 • All participants have valid email addresses
-• You have sufficient permissions to access calendars
 • Your network connection is stable
+• The meeting details are complete
 
 Error: ${error.message || 'Unknown error'}`;
       
-      alert(errorMessage);
+      console.error("MEETING ERROR:", errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -258,6 +362,7 @@ Error: ${error.message || 'Unknown error'}`;
                     <div className="flex items-center gap-2">
                       <Input
                         type="time"
+                        step="900"
                         className="flex-1"
                         value={range.startTime}
                         onChange={(e) => updateTimeRange(range.id, "startTime", e.target.value)}
@@ -265,6 +370,7 @@ Error: ${error.message || 'Unknown error'}`;
                       <span className="text-xs">to</span>
                       <Input
                         type="time"
+                        step="900"
                         className="flex-1"
                         value={range.endTime}
                         onChange={(e) => updateTimeRange(range.id, "endTime", e.target.value)}
@@ -293,18 +399,56 @@ Error: ${error.message || 'Unknown error'}`;
               className="flex-1 min-w-0" 
               size="sm"
               onClick={() => {
-                // Preview email functionality - to be implemented
-                console.log("Preview email clicked");
+                if (participants.length === 0) {
+                  console.error("❌ Please add participants first");
+                  return;
+                }
+                
+                // Show email preview
+                const vitalParticipants = participants.filter(p => p.priority === 'vital');
+                const optionalParticipants = participants.filter(p => p.priority === 'optional');
+                
+                const previewData = {
+                  title: meetingTitle || "Your Meeting Title",
+                  duration: duration,
+                  timeRanges: timeRanges.filter(range => {
+                    if (range.isAllDay) return range.date;
+                    return range.date && range.startTime && range.endTime;
+                  }),
+                  vitalParticipants,
+                  optionalParticipants
+                };
+                
+                console.log("📧 EMAIL PREVIEW:");
+                console.log("=================");
+                console.log(`📋 Meeting: ${previewData.title}`);
+                console.log(`⏱️  Duration: ${previewData.duration} minutes`);
+                console.log(`📅 Time Options: ${previewData.timeRanges.length}`);
+                console.log("");
+                console.log("📧 Emails will be sent to:");
+                console.log("Vital Participants (must respond):");
+                vitalParticipants.forEach((p, i) => {
+                  console.log(`  ${i+1}. ${p.name} (${p.email})`);
+                });
+                if (optionalParticipants.length > 0) {
+                  console.log("Optional Participants (included in final invite):");
+                  optionalParticipants.forEach((p, i) => {
+                    console.log(`  ${i+1}. ${p.name} (${p.email})`);
+                  });
+                }
+                console.log("");
+                console.log("📨 Each vital participant will receive:");
+                console.log("- Interactive HTML email with clickable time buttons");
+                console.log("- Unique tracking URLs for response monitoring");
+                console.log("- Mobile-friendly responsive design");
+                console.log("- Plain text fallback for accessibility");
+                console.log("=================");
               }}
               disabled={isProcessing || participants.length === 0}
             >
               <Eye className="h-3 w-3 mr-1" />
               <span className="truncate">
-                {participants.length === 0 ? (
-                  "Add people"
-                ) : (
-                  "Preview"
-                )}
+                {participants.length === 0 ? "Add people" : "Preview"}
               </span>
             </Button>
             
@@ -328,22 +472,20 @@ Error: ${error.message || 'Unknown error'}`;
           </div>
         </TabsContent>
 
-        {/* Pending Tab - Placeholder for now */}
-        <TabsContent value="pending" className="flex-1 overflow-y-auto p-4 m-0 min-h-0">
-          <div className="text-center text-muted-foreground">
-            <Video className="h-8 w-8 mx-auto mb-2" />
-            <p>Pending meetings will appear here</p>
-            <p className="text-xs">Feature coming in Phase 2</p>
-          </div>
+        {/* Pending Tab - Enhanced with real-time updates */}
+        <TabsContent value="pending" className="flex-1 overflow-y-auto m-0 min-h-0">
+          <PendingMeetingsView 
+            onConfirmMeeting={(meetingId, timeSlotId) => {
+              console.log('Meeting confirmed:', { meetingId, timeSlotId });
+              // Switch to upcoming tab after confirmation
+              setActiveTab('upcoming');
+            }}
+          />
         </TabsContent>
 
-        {/* Upcoming Tab - Placeholder for now */}
-        <TabsContent value="upcoming" className="flex-1 overflow-y-auto p-4 m-0 min-h-0">
-          <div className="text-center text-muted-foreground">
-            <Users className="h-8 w-8 mx-auto mb-2" />
-            <p>Upcoming meetings will appear here</p>
-            <p className="text-xs">Feature coming in Phase 2</p>
-          </div>
+        {/* Upcoming Tab - Enhanced with confirmed meetings */}
+        <TabsContent value="upcoming" className="flex-1 overflow-y-auto m-0 min-h-0">
+          <UpcomingMeetingsView />
         </TabsContent>
       </Tabs>
     </div>

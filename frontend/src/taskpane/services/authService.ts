@@ -92,6 +92,7 @@ class AuthService {
             'https://graph.microsoft.com/Calendars.Read.Shared',
             'https://graph.microsoft.com/User.Read',
             'https://graph.microsoft.com/User.Read.All',
+            'https://graph.microsoft.com/Mail.Send',
             'https://graph.microsoft.com/email',
             'https://graph.microsoft.com/openid',
             'https://graph.microsoft.com/profile'

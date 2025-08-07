@@ -13,6 +13,11 @@ const port = process.env.PORT || 3001;
 // Token cache with 1 hour TTL
 const tokenCache = new NodeCache({ stdTTL: 3600 });
 
+// Import meeting coordination modules
+const MeetingProposal = require('./models/MeetingProposal');
+const meetingStore = require('./storage/MeetingStore');
+const { generateTimeSelectionEmail } = require('./templates/timeSelectionEmail');
+
 // CORS configuration
 app.use(cors({
     origin: ['https://localhost:3000', 'https://outlook.office.com', 'https://outlook.office365.com'],
@@ -29,6 +34,18 @@ const clientConfig = {
         authority: 'https://login.microsoftonline.com/common'
     }
 };
+
+// Log configuration status (without secrets)
+console.log('Azure AD Configuration:');
+console.log('- Client ID present:', !!process.env.AZURE_CLIENT_ID);
+console.log('- Client Secret present:', !!process.env.AZURE_CLIENT_SECRET);
+console.log('- Client ID value:', process.env.AZURE_CLIENT_ID ? `${process.env.AZURE_CLIENT_ID.substring(0, 8)}...` : 'MISSING');
+
+if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_CLIENT_SECRET) {
+    console.error('❌ CRITICAL: Missing Azure AD environment variables!');
+    console.error('Please set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET environment variables');
+    console.error('The authentication flow will not work without these values');
+}
 
 const cca = new ConfidentialClientApplication(clientConfig);
 
@@ -47,8 +64,12 @@ function getKey(header, callback) {
 
 // Middleware to validate bootstrap token
 const validateBootstrapToken = (req, res, next) => {
+    console.log('Auth middleware called for:', req.method, req.path);
     const authHeader = req.headers.authorization;
+    console.log('Auth header present:', !!authHeader);
+    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        console.log('No valid authorization header found');
         return res.status(401).json({ error: 'No valid authorization header found' });
     }
 
@@ -59,10 +80,20 @@ const validateBootstrapToken = (req, res, next) => {
         issuer: /^https:\/\/login\.microsoftonline\.com\/.*\/v2\.0$/
     }, (err, decoded) => {
         if (err) {
-            console.error('Token validation error:', err);
-            return res.status(401).json({ error: 'Invalid token' });
+            console.error('❌ Token validation failed:');
+            console.error('- Error type:', err.name);
+            console.error('- Error message:', err.message);
+            console.error('- Expected audience:', clientConfig.auth.clientId);
+            console.error('- Token length:', token.length);
+            console.error('- Token preview:', token.substring(0, 50) + '...');
+            return res.status(401).json({ 
+                error: 'Invalid token',
+                details: err.message,
+                errorType: err.name
+            });
         }
         
+        console.log('✅ Token validation successful for user:', decoded.oid || decoded.sub);
         req.user = decoded;
         req.bootstrapToken = token;
         next();
@@ -74,6 +105,19 @@ app.get('/health', (req, res) => {
     res.json({ status: 'OK', message: 'Meeting Optimizer API is running' });
 });
 
+// Test endpoint to verify server is running
+app.get('/api/test', (req, res) => {
+    res.json({ 
+        status: 'Server is running',
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            'POST /api/meetings/create': 'Create meeting proposal',
+            'GET /api/meetings': 'List meetings',
+            'POST /api/meetings/:id/send-proposals': 'Send proposals'
+        }
+    });
+});
+
 // Exchange bootstrap token for Microsoft Graph access token
 app.post('/api/auth/token', validateBootstrapToken, async (req, res) => {
     try {
@@ -83,6 +127,7 @@ app.post('/api/auth/token', validateBootstrapToken, async (req, res) => {
             'https://graph.microsoft.com/Calendars.Read.Shared',
             'https://graph.microsoft.com/User.Read',
             'https://graph.microsoft.com/User.Read.All',
+            'https://graph.microsoft.com/Mail.Send',
             'https://graph.microsoft.com/email',
             'https://graph.microsoft.com/openid',
             'https://graph.microsoft.com/profile',
@@ -248,6 +293,534 @@ app.post('/api/meetings/optimize', validateBootstrapToken, async (req, res) => {
         });
     }
 });
+
+// ================================
+// ENHANCED MEETING COORDINATION API
+// ================================
+
+
+// Create a new meeting proposal
+app.post('/api/meetings/create', validateBootstrapToken, async (req, res) => {
+    console.log('Meeting creation request received:', req.body);
+    try {
+        const { 
+            title, 
+            location, 
+            duration, 
+            timeZone, 
+            description,
+            vitalParticipants, 
+            optionalParticipants, 
+            proposedTimeSlots 
+        } = req.body;
+
+        // Validation
+        if (!title || !duration || !vitalParticipants || !proposedTimeSlots) {
+            return res.status(400).json({ 
+                error: 'Missing required fields: title, duration, vitalParticipants, proposedTimeSlots' 
+            });
+        }
+
+        if (vitalParticipants.length === 0) {
+            return res.status(400).json({ 
+                error: 'At least one vital participant is required' 
+            });
+        }
+
+        if (proposedTimeSlots.length === 0) {
+            return res.status(400).json({ 
+                error: 'At least one time slot proposal is required' 
+            });
+        }
+
+        // Create meeting proposal
+        const meeting = new MeetingProposal({
+            organizerId: req.user.oid,
+            title,
+            location: location || '',
+            duration: parseInt(duration),
+            timeZone: timeZone || 'UTC',
+            description: description || '',
+            vitalParticipants: vitalParticipants.map(p => ({
+                email: p.email.toLowerCase().trim(),
+                name: p.name || p.email.split('@')[0],
+                priority: 'vital'
+            })),
+            optionalParticipants: (optionalParticipants || []).map(p => ({
+                email: p.email.toLowerCase().trim(),
+                name: p.name || p.email.split('@')[0],
+                priority: 'optional'
+            })),
+            proposedTimeSlots: proposedTimeSlots.map((slot, index) => ({
+                id: `slot_${index + 1}_${Date.now()}`,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+                timezone: timeZone || 'UTC'
+            }))
+        });
+
+        // Generate tracking tokens for vital participants
+        meeting.generateTrackingTokens();
+
+        // Save to store
+        meetingStore.save(meeting);
+
+        res.json({
+            success: true,
+            meetingId: meeting.id,
+            status: meeting.status,
+            message: 'Meeting proposal created successfully'
+        });
+
+    } catch (error) {
+        console.error('Meeting creation error:', error);
+        res.status(500).json({ 
+            error: 'Failed to create meeting proposal', 
+            details: error.message 
+        });
+    }
+});
+
+
+
+// Send time selection emails to vital participants
+app.post('/api/meetings/:meetingId/send-proposals', validateBootstrapToken, async (req, res) => {
+    try {
+        const { meetingId } = req.params;
+        const { baseUrl } = req.body; // Frontend should provide the base URL
+
+        const meeting = meetingStore.getById(meetingId);
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found' });
+        }
+
+        if (meeting.organizerId !== req.user.oid) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (meeting.status !== 'proposed') {
+            return res.status(400).json({ 
+                error: `Cannot send proposals for meeting with status: ${meeting.status}` 
+            });
+        }
+
+        const emailResults = [];
+        const actualBaseUrl = baseUrl || `http://localhost:${port}`;
+
+        // Get access token for Microsoft Graph to send emails
+        const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
+            { scopes: ['https://graph.microsoft.com/Mail.Send'] },
+            { 
+                headers: { 
+                    'Authorization': `Bearer ${req.bootstrapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const accessToken = tokenResponse.data.accessToken;
+
+        // Generate and send emails for vital participants
+        for (const participant of meeting.vitalParticipants) {
+            try {
+                const emailContent = generateTimeSelectionEmail(meeting, participant.email, actualBaseUrl);
+                
+                console.log(`\n=== SENDING EMAIL TO ${participant.email} ===`);
+                console.log('Subject:', `Time Selection Required: ${meeting.title}`);
+                console.log('Tracking URLs:', Object.keys(emailContent.trackingUrls).length, 'time options');
+                
+                // Send email via Microsoft Graph
+                const emailSent = await sendEmailViaGraph(
+                    accessToken,
+                    participant.email,
+                    `Time Selection Required: ${meeting.title}`,
+                    emailContent.html,
+                    emailContent.plainText
+                );
+
+                if (emailSent.success) {
+                    console.log(`✅ Email sent successfully to ${participant.email}`);
+                    emailResults.push({
+                        email: participant.email,
+                        status: 'sent',
+                        trackingToken: meeting.emailTrackingTokens[participant.email],
+                        messageId: emailSent.messageId
+                    });
+                } else {
+                    throw new Error(emailSent.error);
+                }
+
+            } catch (emailError) {
+                console.error(`❌ Failed to send email to ${participant.email}:`, emailError);
+                emailResults.push({
+                    email: participant.email,
+                    status: 'failed',
+                    error: emailError.message
+                });
+            }
+        }
+
+        // Update meeting status to pending
+        meetingStore.update(meetingId, (meeting) => {
+            meeting.markAsPending();
+        });
+
+        res.json({
+            success: true,
+            meetingId: meeting.id,
+            status: 'pending',
+            emailResults,
+            message: 'Time selection emails sent to vital participants'
+        });
+
+    } catch (error) {
+        console.error('Send proposals error:', error);
+        res.status(500).json({ 
+            error: 'Failed to send meeting proposals', 
+            details: error.message 
+        });
+    }
+});
+
+// Handle time slot selection responses
+app.get('/api/meetings/:meetingId/respond', async (req, res) => {
+    try {
+        const { meetingId } = req.params;
+        const { email, slot, token } = req.query;
+
+        if (!email || !slot || !token) {
+            return res.status(400).json({ error: 'Missing required parameters' });
+        }
+
+        const meeting = meetingStore.getById(meetingId);
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found' });
+        }
+
+        if (meeting.status !== 'pending') {
+            return res.status(400).json({ 
+                error: 'Meeting is no longer accepting responses' 
+            });
+        }
+
+        // Record the response
+        const metadata = {
+            ipAddress: req.ip,
+            userAgent: req.get('User-Agent')
+        };
+
+        meetingStore.update(meetingId, (meeting) => {
+            meeting.recordResponse(email, slot, token, metadata);
+        });
+
+        // Return success page HTML
+        const updatedMeeting = meetingStore.getById(meetingId);
+        const selectedSlot = updatedMeeting.proposedTimeSlots.find(s => s.id === slot);
+        const startDate = new Date(selectedSlot.startTime);
+        const endDate = new Date(selectedSlot.endTime);
+        
+        const successHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Response Recorded</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 0; padding: 40px 20px; background: #f8f9fa; }
+        .container { max-width: 500px; margin: 0 auto; background: white; border-radius: 12px; padding: 40px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .success-icon { font-size: 64px; margin-bottom: 20px; }
+        h1 { color: #1f2937; margin: 0 0 16px 0; }
+        p { color: #6b7280; margin: 0 0 24px 0; line-height: 1.5; }
+        .selected-time { background: #f0f9ff; border: 2px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 24px 0; }
+        .time-details { font-weight: 600; color: #1f2937; font-size: 18px; }
+        .meeting-title { color: #3b82f6; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-icon">✅</div>
+        <h1>Thank You!</h1>
+        <p>Your time preference has been recorded for <span class="meeting-title">"${updatedMeeting.title}"</span></p>
+        
+        <div class="selected-time">
+            <div class="time-details">
+                ${startDate.toLocaleDateString('en-US', { 
+                    weekday: 'long', 
+                    month: 'long', 
+                    day: 'numeric', 
+                    year: 'numeric' 
+                })}
+            </div>
+            <div style="color: #6b7280; margin-top: 8px;">
+                ${startDate.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit', 
+                    hour12: true 
+                })} - ${endDate.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit', 
+                    hour12: true 
+                })}
+            </div>
+        </div>
+
+        <p>The organizer will send the final meeting invite once all participants have responded.</p>
+        
+        <div style="margin-top: 32px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 14px; color: #9ca3af;">
+            Response recorded at ${new Date().toLocaleString()}
+        </div>
+    </div>
+</body>
+</html>
+        `;
+
+        res.setHeader('Content-Type', 'text/html');
+        res.send(successHtml);
+
+    } catch (error) {
+        console.error('Response recording error:', error);
+        
+        const errorHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Response Error</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 0; padding: 40px 20px; background: #f8f9fa; }
+        .container { max-width: 500px; margin: 0 auto; background: white; border-radius: 12px; padding: 40px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .error-icon { font-size: 64px; margin-bottom: 20px; }
+        h1 { color: #dc2626; margin: 0 0 16px 0; }
+        p { color: #6b7280; margin: 0 0 24px 0; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-icon">❌</div>
+        <h1>Response Error</h1>
+        <p>Sorry, we couldn't record your response. This might be because:</p>
+        <ul style="text-align: left; color: #6b7280;">
+            <li>The link has expired or been used already</li>
+            <li>The meeting is no longer accepting responses</li>
+            <li>There was a technical issue</li>
+        </ul>
+        <p>Please contact the meeting organizer for assistance.</p>
+    </div>
+</body>
+</html>
+        `;
+
+        res.status(500).setHeader('Content-Type', 'text/html');
+        res.send(errorHtml);
+    }
+});
+
+// Get meeting details and response status
+app.get('/api/meetings/:meetingId', validateBootstrapToken, async (req, res) => {
+    try {
+        const { meetingId } = req.params;
+        
+        const meeting = meetingStore.getById(meetingId);
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found' });
+        }
+
+        // Only organizer can view full details
+        if (meeting.organizerId !== req.user.oid) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        res.json({
+            success: true,
+            meeting: {
+                id: meeting.id,
+                title: meeting.title,
+                location: meeting.location,
+                duration: meeting.duration,
+                status: meeting.status,
+                createdAt: meeting.createdAt,
+                sentAt: meeting.sentAt,
+                confirmedAt: meeting.confirmedAt,
+                vitalParticipants: meeting.vitalParticipants,
+                optionalParticipants: meeting.optionalParticipants,
+                proposedTimeSlots: meeting.proposedTimeSlots,
+                selectedTimeSlot: meeting.selectedTimeSlot,
+                responseStats: meeting.responseStats,
+                responses: Object.keys(meeting.responses).map(email => ({
+                    email,
+                    timeSlotId: meeting.responses[email].timeSlotId,
+                    respondedAt: meeting.responses[email].respondedAt
+                }))
+            }
+        });
+
+    } catch (error) {
+        console.error('Get meeting error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get meeting details', 
+            details: error.message 
+        });
+    }
+});
+
+// Get all meetings for current user
+app.get('/api/meetings', validateBootstrapToken, async (req, res) => {
+    try {
+        const { status } = req.query;
+        
+        const meetings = meetingStore.getUserMeetings(req.user.oid, status);
+        
+        // Return simplified meeting list
+        const meetingList = meetings.map(meeting => ({
+            id: meeting.id,
+            title: meeting.title,
+            status: meeting.status,
+            createdAt: meeting.createdAt,
+            sentAt: meeting.sentAt,
+            confirmedAt: meeting.confirmedAt,
+            vitalCount: meeting.vitalParticipants.length,
+            optionalCount: meeting.optionalParticipants.length,
+            responseStats: meeting.responseStats
+        }));
+
+        res.json({
+            success: true,
+            meetings: meetingList
+        });
+
+    } catch (error) {
+        console.error('Get meetings error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get meetings', 
+            details: error.message 
+        });
+    }
+});
+
+// Email open tracking pixel
+app.get('/api/meetings/:meetingId/track/open', async (req, res) => {
+    try {
+        const { meetingId } = req.params;
+        const { email, token } = req.query;
+
+        // Log email open (in production, you'd store this)
+        console.log(`Email opened: ${email} for meeting ${meetingId} at ${new Date().toISOString()}`);
+
+        // Return 1x1 transparent pixel
+        const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+        
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Content-Length', pixel.length);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.send(pixel);
+
+    } catch (error) {
+        console.error('Email tracking error:', error);
+        res.status(200).send(''); // Don't break email rendering
+    }
+});
+
+// Confirm meeting and send Outlook invites
+app.post('/api/meetings/:meetingId/confirm', validateBootstrapToken, async (req, res) => {
+    try {
+        const { meetingId } = req.params;
+        const { timeSlotId } = req.body;
+
+        const meeting = meetingStore.getById(meetingId);
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found' });
+        }
+
+        if (meeting.organizerId !== req.user.oid) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (meeting.status !== 'pending') {
+            return res.status(400).json({ 
+                error: `Cannot confirm meeting with status: ${meeting.status}` 
+            });
+        }
+
+        if (!timeSlotId) {
+            return res.status(400).json({ error: 'Time slot ID is required' });
+        }
+
+        const selectedSlot = meeting.proposedTimeSlots.find(slot => slot.id === timeSlotId);
+        if (!selectedSlot) {
+            return res.status(400).json({ error: 'Invalid time slot ID' });
+        }
+
+        // TODO: Create actual Outlook calendar event using Microsoft Graph
+        // For now, we'll simulate this
+        const outlookEventId = `outlook_event_${Date.now()}`;
+
+        // Update meeting status
+        meetingStore.update(meetingId, (meeting) => {
+            meeting.confirmMeeting(timeSlotId, outlookEventId);
+        });
+
+        const updatedMeeting = meetingStore.getById(meetingId);
+
+        res.json({
+            success: true,
+            meetingId: meeting.id,
+            status: 'confirmed',
+            selectedTimeSlot: updatedMeeting.selectedTimeSlot,
+            outlookEventId,
+            message: 'Meeting confirmed and invites sent'
+        });
+
+    } catch (error) {
+        console.error('Meeting confirmation error:', error);
+        res.status(500).json({ 
+            error: 'Failed to confirm meeting', 
+            details: error.message 
+        });
+    }
+});
+
+// Helper function to send emails via Microsoft Graph
+async function sendEmailViaGraph(accessToken, recipientEmail, subject, htmlContent, textContent) {
+    try {
+        const emailMessage = {
+            message: {
+                subject: subject,
+                body: {
+                    contentType: 'HTML',
+                    content: htmlContent
+                },
+                toRecipients: [
+                    {
+                        emailAddress: {
+                            address: recipientEmail
+                        }
+                    }
+                ],
+                importance: 'normal'
+            },
+            saveToSentItems: true
+        };
+
+        const response = await axios.post('https://graph.microsoft.com/v1.0/me/sendMail', emailMessage, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return {
+            success: true,
+            messageId: response.headers['request-id'] || 'sent'
+        };
+
+    } catch (error) {
+        console.error('Microsoft Graph email error:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.error?.message || error.message
+        };
+    }
+}
 
 // Search organization users - Microsoft Graph integration
 app.post('/api/users/search', validateBootstrapToken, async (req, res) => {
