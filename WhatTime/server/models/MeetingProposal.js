@@ -166,7 +166,7 @@ class MeetingProposal {
     /**
      * Confirm meeting with selected time slot
      */
-    confirmMeeting(timeSlotId, outlookEventId = null) {
+    confirmMeeting(timeSlotId, outlookEventId = null, outlookWebLink = null) {
         const timeSlot = this.proposedTimeSlots.find(slot => slot.id === timeSlotId);
         if (!timeSlot) {
             throw new Error('Invalid time slot ID');
@@ -179,6 +179,10 @@ class MeetingProposal {
         
         if (outlookEventId) {
             this.outlookEventId = outlookEventId;
+        }
+        
+        if (outlookWebLink) {
+            this.outlookWebLink = outlookWebLink;
         }
     }
 

@@ -125,6 +125,48 @@ export function createMeetingInvite(details: {
   })
 }
 
+// Open Outlook compose dialog with pre-filled meeting data
+export function openOutlookComposeDialog(meetingData: {
+  title: string
+  startTime: string
+  endTime: string
+  attendees: Array<{ email: string; name: string; type: string }>
+  location?: string
+  description?: string
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      console.log('🗓️ Opening Outlook compose dialog with meeting data:', meetingData.title);
+      
+      // Convert attendees to email addresses array
+      const attendeeEmails = meetingData.attendees.map(attendee => attendee.email);
+      
+      // Convert ISO strings to Date objects
+      const startDate = new Date(meetingData.startTime);
+      const endDate = new Date(meetingData.endTime);
+      
+      console.log('📧 Attendees:', attendeeEmails.join(', '));
+      console.log('⏰ Time:', startDate.toLocaleString(), '-', endDate.toLocaleString());
+      
+      // Use Office.js to display the new appointment form
+      Office.context.mailbox.displayNewAppointmentForm({
+        requiredAttendees: attendeeEmails,
+        subject: meetingData.title,
+        start: startDate,
+        end: endDate,
+        location: meetingData.location || '',
+        body: meetingData.description || ''
+      });
+      
+      console.log('✅ Outlook compose dialog opened successfully');
+      resolve();
+    } catch (error) {
+      console.error('❌ Error opening Outlook compose dialog:', error);
+      reject(error);
+    }
+  });
+}
+
 // Close the task pane
 export function closeTaskPane(): void {
   try {

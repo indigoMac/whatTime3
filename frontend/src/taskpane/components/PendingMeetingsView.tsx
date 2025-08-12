@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Clock, Users, Check, AlertCircle, Eye, Calendar, ChevronRight } from "lucide-react";
 import { Button } from "./ui/button";
 import { authService } from "../services/authService";
+import { openOutlookComposeDialog } from '../../lib/office-api';
 
 interface Meeting {
   id: string;
@@ -166,7 +167,16 @@ export function PendingMeetingsView({ onConfirmMeeting }: PendingMeetingsViewPro
 
       const result = await response.json();
       
-      console.log(`🎉 Meeting confirmed successfully!\n\nOutlook invites have been sent to all participants.\nThe meeting will now appear in your Upcoming tab.`);
+      console.log(`🎉 Meeting confirmed! Opening Outlook compose dialog...`);
+      
+      // Open Outlook compose dialog with pre-filled meeting data
+      try {
+        await openOutlookComposeDialog(result.meetingData);
+        console.log(`📧 Outlook compose dialog opened successfully`);
+      } catch (outlookError) {
+        console.error('Failed to open Outlook dialog:', outlookError);
+        console.log(`⚠️ Could not open Outlook dialog, but meeting was confirmed`);
+      }
       
       // Refresh the meetings list and close details
       setSelectedMeeting(null);

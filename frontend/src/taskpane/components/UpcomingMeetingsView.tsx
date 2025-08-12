@@ -34,6 +34,7 @@ interface MeetingDetails {
     timezone: string;
   } | null;
   outlookEventId?: string;
+  outlookWebLink?: string;
 }
 
 export function UpcomingMeetingsView(): JSX.Element {
@@ -142,12 +143,17 @@ export function UpcomingMeetingsView(): JSX.Element {
   };
 
   const openInOutlook = () => {
-    if (selectedMeeting?.outlookEventId) {
-      // Open in Outlook web or desktop
+    if (selectedMeeting?.outlookWebLink) {
+      // Use the official webLink from Microsoft Graph
+      console.log('🔗 Opening meeting in Outlook:', selectedMeeting.outlookWebLink);
+      window.open(selectedMeeting.outlookWebLink, '_blank');
+    } else if (selectedMeeting?.outlookEventId) {
+      // Fallback to constructed URL if webLink not available
       const outlookUrl = `https://outlook.office.com/calendar/item/${selectedMeeting.outlookEventId}`;
+      console.log('🔗 Opening meeting in Outlook (fallback):', outlookUrl);
       window.open(outlookUrl, '_blank');
     } else {
-      console.error('❌ Outlook event ID not available');
+      console.error('❌ Outlook event information not available');
     }
   };
 

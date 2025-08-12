@@ -645,6 +645,7 @@ app.get('/api/meetings/:meetingId', validateBootstrapToken, async (req, res) => 
                 optionalParticipants: meeting.optionalParticipants,
                 proposedTimeSlots: meeting.proposedTimeSlots,
                 selectedTimeSlot: meeting.selectedTimeSlot,
+                outlookWebLink: meeting.outlookWebLink,
                 responseStats: meeting.responseStats,
                 responses: Object.keys(meeting.responses).map(email => ({
                     email,
@@ -750,24 +751,44 @@ app.post('/api/meetings/:meetingId/confirm', validateBootstrapToken, async (req,
             return res.status(400).json({ error: 'Invalid time slot ID' });
         }
 
-        // TODO: Create actual Outlook calendar event using Microsoft Graph
-        // For now, we'll simulate this
-        const outlookEventId = `outlook_event_${Date.now()}`;
+        console.log('🔄 Preparing meeting data for Outlook compose dialog...');
 
-        // Update meeting status
+        // Prepare the meeting data for Outlook compose dialog
+        const allParticipants = [
+            ...meeting.vitalParticipants,
+            ...meeting.optionalParticipants
+        ];
+
+        const meetingData = {
+            title: meeting.title,
+            location: meeting.location || '',
+            description: `This meeting was coordinated through WhatTime Meeting Optimizer.\n\nDuration: ${meeting.duration} minutes`,
+            startTime: selectedSlot.startTime,
+            endTime: selectedSlot.endTime,
+            attendees: allParticipants.map(p => ({
+                email: p.email,
+                name: p.name,
+                type: 'required'
+            }))
+        };
+
+        // Update meeting status to confirmed (but without Outlook event ID yet)
         meetingStore.update(meetingId, (meeting) => {
-            meeting.confirmMeeting(timeSlotId, outlookEventId);
+            meeting.confirmMeeting(timeSlotId, null, null);
         });
 
         const updatedMeeting = meetingStore.getById(meetingId);
+
+        console.log(`✅ Meeting confirmed! Outlook compose dialog data prepared.`);
+        console.log(`📧 Attendees: ${allParticipants.map(p => p.email).join(', ')}`);
 
         res.json({
             success: true,
             meetingId: meeting.id,
             status: 'confirmed',
             selectedTimeSlot: updatedMeeting.selectedTimeSlot,
-            outlookEventId,
-            message: 'Meeting confirmed and invites sent'
+            meetingData: meetingData,
+            message: 'Meeting confirmed - opening Outlook compose dialog'
         });
 
     } catch (error) {
@@ -820,6 +841,226 @@ async function sendEmailViaGraph(accessToken, recipientEmail, subject, htmlConte
             error: error.response?.data?.error?.message || error.message
         };
     }
+}
+
+// Helper function to create Outlook calendar event via Microsoft Graph
+async function createOutlookEvent(accessToken, meeting, selectedTimeSlot) {
+    try {
+        // Combine all participants (vital + optional) for the final meeting
+        const allParticipants = [
+            ...meeting.vitalParticipants,
+            ...meeting.optionalParticipants
+        ];
+
+        // Convert time slot to proper DateTime format
+        const startDateTime = new Date(selectedTimeSlot.startTime).toISOString();
+        const endDateTime = new Date(selectedTimeSlot.endTime).toISOString();
+
+        const calendarEvent = {
+            subject: meeting.title,
+            body: {
+                contentType: 'HTML',
+                content: `
+                    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
+                        <h2 style="color: #2563eb; margin-bottom: 16px;">${meeting.title}</h2>
+                        ${meeting.description ? `<p style="margin-bottom: 16px;">${meeting.description}</p>` : ''}
+                        <div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                            <h3 style="margin: 0 0 8px 0; color: #374151;">Meeting Details</h3>
+                            <p style="margin: 0;"><strong>Duration:</strong> ${meeting.duration} minutes</p>
+                            ${meeting.location ? `<p style="margin: 0;"><strong>Location:</strong> ${meeting.location}</p>` : ''}
+                        </div>
+                        <p style="color: #6b7280; font-size: 14px; margin: 0;">
+                            This meeting was coordinated through WhatTime Meeting Optimizer.
+                        </p>
+                    </div>
+                `
+            },
+            start: {
+                dateTime: startDateTime,
+                timeZone: selectedTimeSlot.timezone || 'UTC'
+            },
+            end: {
+                dateTime: endDateTime,
+                timeZone: selectedTimeSlot.timezone || 'UTC'
+            },
+            location: meeting.location ? {
+                displayName: meeting.location
+            } : null,
+            attendees: allParticipants.map(participant => ({
+                emailAddress: {
+                    address: participant.email,
+                    name: participant.name
+                },
+                type: 'required'
+            })),
+            allowNewTimeProposals: false,
+            importance: 'normal',
+            showAs: 'busy',
+            reminderMinutesBeforeStart: 15,
+            isOrganizer: true,
+            responseRequested: true
+        };
+
+        // Remove null location if not provided
+        if (!meeting.location) {
+            delete calendarEvent.location;
+        }
+
+        console.log(`🗓️ Creating Outlook event: ${meeting.title}`);
+        console.log(`⏰ Time: ${startDateTime} - ${endDateTime}`);
+        console.log(`👥 Attendees: ${allParticipants.length} participants`);
+        console.log('📧 Attendee emails:', allParticipants.map(p => p.email).join(', '));
+
+        // Create the calendar event (this should automatically send invites)
+        const response = await axios.post('https://graph.microsoft.com/v1.0/me/calendar/events', calendarEvent, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const eventData = response.data;
+
+        console.log(`✅ Calendar event created successfully!`);
+        console.log(`📅 Event ID: ${eventData.id}`);
+        console.log(`🔗 Web Link: ${eventData.webLink}`);
+        console.log(`📬 Invites should be sent automatically by Outlook`);
+
+        // Manual backup: Send invitation emails if automatic sending fails
+        try {
+            for (const participant of allParticipants) {
+                const inviteEmailContent = generateMeetingInviteEmail(meeting, selectedTimeSlot, eventData.webLink, participant.email);
+                
+                const emailSent = await sendEmailViaGraph(
+                    accessToken,
+                    participant.email,
+                    `Meeting Invitation: ${meeting.title}`,
+                    inviteEmailContent.html,
+                    inviteEmailContent.plainText
+                );
+
+                if (emailSent.success) {
+                    console.log(`📧 Manual invite sent to: ${participant.email}`);
+                } else {
+                    console.log(`⚠️ Failed to send manual invite to: ${participant.email}`);
+                }
+            }
+        } catch (emailError) {
+            console.log(`⚠️ Manual email sending failed (calendar event still created):`, emailError.message);
+        }
+
+        return {
+            success: true,
+            eventId: eventData.id,
+            webLink: eventData.webLink,
+            outlookUrl: `https://outlook.office.com/calendar/item/${eventData.id}`
+        };
+
+    } catch (error) {
+        console.error('Microsoft Graph calendar error:', error.response?.data || error.message);
+        return {
+            success: false,
+            error: error.response?.data?.error?.message || error.message
+        };
+    }
+}
+
+// Helper function to generate meeting invitation email content
+function generateMeetingInviteEmail(meeting, selectedTimeSlot, outlookWebLink, recipientEmail) {
+    const startDateTime = new Date(selectedTimeSlot.startTime);
+    const endDateTime = new Date(selectedTimeSlot.endTime);
+    
+    const formatDate = (date) => {
+        return date.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric' 
+        });
+    };
+    
+    const formatTime = (date) => {
+        return date.toLocaleTimeString('en-US', { 
+            hour: 'numeric', 
+            minute: '2-digit', 
+            hour12: true 
+        });
+    };
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Invitation: ${meeting.title}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    
+    <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #2563eb; margin: 0;">📅 Meeting Invitation</h1>
+        <p style="color: #6b7280; margin: 8px 0 0 0;">You're invited to join this meeting</p>
+    </div>
+
+    <div style="background: #f8fafc; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
+        <h2 style="color: #1f2937; margin: 0 0 16px 0;">${meeting.title}</h2>
+        
+        <div style="margin-bottom: 16px;">
+            <strong style="color: #374151;">📅 Date:</strong> ${formatDate(startDateTime)}
+        </div>
+        
+        <div style="margin-bottom: 16px;">
+            <strong style="color: #374151;">⏰ Time:</strong> ${formatTime(startDateTime)} - ${formatTime(endDateTime)}
+        </div>
+        
+        <div style="margin-bottom: 16px;">
+            <strong style="color: #374151;">⏱️ Duration:</strong> ${meeting.duration} minutes
+        </div>
+        
+        ${meeting.location ? `
+        <div style="margin-bottom: 16px;">
+            <strong style="color: #374151;">📍 Location:</strong> ${meeting.location}
+        </div>
+        ` : ''}
+    </div>
+
+    <div style="text-align: center; margin-bottom: 24px;">
+        <a href="${outlookWebLink}" 
+           style="background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600;">
+            📅 View in Outlook Calendar
+        </a>
+    </div>
+
+    <div style="background: #f0f9ff; padding: 16px; border-radius: 8px; border-left: 4px solid #2563eb; margin-bottom: 24px;">
+        <h3 style="color: #1e40af; margin: 0 0 8px 0;">Meeting Details</h3>
+        <p style="margin: 0; color: #1e40af;">This meeting was coordinated through WhatTime Meeting Optimizer to find the best time for all participants.</p>
+    </div>
+
+    <div style="text-align: center; color: #6b7280; font-size: 14px;">
+        <p>If you can't attend, please respond directly through Outlook Calendar.</p>
+        <p style="margin: 16px 0 0 0;">Powered by WhatTime Meeting Optimizer</p>
+    </div>
+
+</body>
+</html>
+    `;
+
+    const plainText = `
+Meeting Invitation: ${meeting.title}
+
+Date: ${formatDate(startDateTime)}
+Time: ${formatTime(startDateTime)} - ${formatTime(endDateTime)}
+Duration: ${meeting.duration} minutes
+${meeting.location ? `Location: ${meeting.location}` : ''}
+
+View in Outlook: ${outlookWebLink}
+
+This meeting was coordinated through WhatTime Meeting Optimizer.
+
+If you can't attend, please respond directly through Outlook Calendar.
+    `.trim();
+
+    return { html, plainText };
 }
 
 // Search organization users - Microsoft Graph integration
