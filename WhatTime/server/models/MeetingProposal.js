@@ -84,38 +84,82 @@ class MeetingProposal {
      * Calculate response statistics
      */
     calculateResponseStats() {
-        const vitalEmails = this.vitalParticipants.map(p => p.email);
-        const vitalResponses = Object.keys(this.responses).filter(email => vitalEmails.includes(email));
+        const vitalEmails = this.vitalParticipants.map(p => p.email.toLowerCase());
+        const optionalEmails = this.optionalParticipants.map(p => p.email.toLowerCase());
+        const vitalResponses = Object.keys(this.responses).filter(email => 
+            vitalEmails.includes(email.toLowerCase())
+        );
+        const optionalResponses = Object.keys(this.responses).filter(email => 
+            optionalEmails.includes(email.toLowerCase())
+        );
         
         const timeSlotCounts = {};
         const totalVital = vitalEmails.length;
+        const totalOptional = optionalEmails.length;
         
         // Count responses per time slot
         this.proposedTimeSlots.forEach(slot => {
             timeSlotCounts[slot.id] = {
                 count: 0,
+                vitalCount: 0,
+                optionalCount: 0,
                 percentage: 0,
-                respondents: []
+                respondents: [],
+                vitalRespondents: [],
+                optionalRespondents: []
             };
         });
 
-        vitalResponses.forEach(email => {
+        // Process responses - handle both single selection (legacy) and multi-selection (Adaptive Cards)
+        [...vitalResponses, ...optionalResponses].forEach(email => {
             const response = this.responses[email];
-            if (timeSlotCounts[response.timeSlotId]) {
-                timeSlotCounts[response.timeSlotId].count++;
-                timeSlotCounts[response.timeSlotId].respondents.push(email);
+            const isVital = vitalEmails.includes(email.toLowerCase());
+            
+            // Handle multi-selection from Adaptive Cards
+            if (response.slots && Array.isArray(response.slots)) {
+                response.slots.forEach(slotId => {
+                    if (timeSlotCounts[slotId]) {
+                        timeSlotCounts[slotId].count++;
+                        timeSlotCounts[slotId].respondents.push(email);
+                        
+                        if (isVital) {
+                            timeSlotCounts[slotId].vitalCount++;
+                            timeSlotCounts[slotId].vitalRespondents.push(email);
+                        } else {
+                            timeSlotCounts[slotId].optionalCount++;
+                            timeSlotCounts[slotId].optionalRespondents.push(email);
+                        }
+                    }
+                });
+            }
+            // Handle single selection from HTML fallback
+            else if (response.timeSlotId && timeSlotCounts[response.timeSlotId]) {
+                const slotId = response.timeSlotId;
+                timeSlotCounts[slotId].count++;
+                timeSlotCounts[slotId].respondents.push(email);
+                
+                if (isVital) {
+                    timeSlotCounts[slotId].vitalCount++;
+                    timeSlotCounts[slotId].vitalRespondents.push(email);
+                } else {
+                    timeSlotCounts[slotId].optionalCount++;
+                    timeSlotCounts[slotId].optionalRespondents.push(email);
+                }
             }
         });
 
-        // Calculate percentages
+        // Calculate percentages based on vital participants
         Object.keys(timeSlotCounts).forEach(slotId => {
-            const count = timeSlotCounts[slotId].count;
-            timeSlotCounts[slotId].percentage = totalVital > 0 ? Math.round((count / totalVital) * 100) : 0;
+            const vitalCount = timeSlotCounts[slotId].vitalCount;
+            timeSlotCounts[slotId].percentage = totalVital > 0 ? Math.round((vitalCount / totalVital) * 100) : 0;
         });
 
         return {
             totalVitalParticipants: totalVital,
+            totalOptionalParticipants: totalOptional,
             respondedCount: vitalResponses.length,
+            vitalRespondedCount: vitalResponses.length,
+            optionalRespondedCount: optionalResponses.length,
             responseRate: totalVital > 0 ? Math.round((vitalResponses.length / totalVital) * 100) : 0,
             timeSlotCounts,
             hasConsensus: this.checkConsensus(timeSlotCounts, totalVital),
@@ -129,7 +173,7 @@ class MeetingProposal {
      */
     checkConsensus(timeSlotCounts, totalVital) {
         const threshold = Math.ceil(totalVital * 0.7); // 70% consensus threshold
-        return Object.values(timeSlotCounts).some(slot => slot.count >= threshold);
+        return Object.values(timeSlotCounts).some(slot => slot.vitalCount >= threshold);
     }
 
     /**
@@ -137,16 +181,21 @@ class MeetingProposal {
      */
     getTopChoice(timeSlotCounts) {
         let topSlot = null;
-        let maxCount = 0;
+        let maxVitalCount = 0;
 
         Object.entries(timeSlotCounts).forEach(([slotId, data]) => {
-            if (data.count > maxCount) {
-                maxCount = data.count;
+            // Prioritize vital participant votes
+            if (data.vitalCount > maxVitalCount) {
+                maxVitalCount = data.vitalCount;
                 topSlot = {
                     slotId,
                     count: data.count,
+                    vitalCount: data.vitalCount,
+                    optionalCount: data.optionalCount,
                     percentage: data.percentage,
-                    respondents: data.respondents
+                    respondents: data.respondents,
+                    vitalRespondents: data.vitalRespondents,
+                    optionalRespondents: data.optionalRespondents
                 };
             }
         });

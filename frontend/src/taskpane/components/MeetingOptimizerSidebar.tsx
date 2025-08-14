@@ -165,7 +165,8 @@ export function MeetingOptimizerSidebar({ userProfile, onClose }: MeetingOptimiz
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          baseUrl: 'http://localhost:3001' // Base URL for tracking links
+          // Don't send baseUrl - let the server use PUBLIC_API_BASE from env
+          // This allows proper HTTPS URLs for ngrok/production
         })
       });
 

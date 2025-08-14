@@ -122,3 +122,10 @@ Meeting Optimizer is a professional Outlook add-in designed to streamline the pr
 ---
 
 **This plan is designed to help you build a world-class, enterprise-ready meeting optimization add-in. Use it to guide your work, onboard collaborators, and keep your project on track.** 
+
+### Security TODOs for Production:
+Register as Actionable Message sender in Microsoft Developer Dashboard
+Implement proper OAM verification (DKIM/SPF/signed cards) in verifyOAM()
+Ensure PUBLIC_API_BASE uses HTTPS in production
+Consider adding rate limiting on the OAM submit endpoint
+The implementation maintains all existing functionality while adding the new Adaptive Card features. Recipients using supported Outlook clients will see the interactive card, while others will see the existing HTML buttons.

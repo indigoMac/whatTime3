@@ -1,4 +1,5 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -17,6 +18,10 @@ const tokenCache = new NodeCache({ stdTTL: 3600 });
 const MeetingProposal = require('./models/MeetingProposal');
 const meetingStore = require('./storage/MeetingStore');
 const { generateTimeSelectionEmail } = require('./templates/timeSelectionEmail');
+
+// Import routes
+const oamRoutes = require('./routes/oam');
+const meetingsRoutes = require('./routes/meetings');
 
 // CORS configuration
 app.use(cors({
@@ -40,6 +45,9 @@ console.log('Azure AD Configuration:');
 console.log('- Client ID present:', !!process.env.AZURE_CLIENT_ID);
 console.log('- Client Secret present:', !!process.env.AZURE_CLIENT_SECRET);
 console.log('- Client ID value:', process.env.AZURE_CLIENT_ID ? `${process.env.AZURE_CLIENT_ID.substring(0, 8)}...` : 'MISSING');
+console.log('- PUBLIC_API_BASE:', process.env.PUBLIC_API_BASE || 'NOT SET');
+
+
 
 if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_CLIENT_SECRET) {
     console.error('❌ CRITICAL: Missing Azure AD environment variables!');
@@ -405,7 +413,8 @@ app.post('/api/meetings/:meetingId/send-proposals', validateBootstrapToken, asyn
         }
 
         const emailResults = [];
-        const actualBaseUrl = baseUrl || `http://localhost:${port}`;
+        // Use PUBLIC_API_BASE if available, otherwise baseUrl from request, otherwise localhost
+        const actualBaseUrl = process.env.PUBLIC_API_BASE || baseUrl || `http://localhost:${port}`;
 
         // Get access token for Microsoft Graph to send emails
         const tokenResponse = await axios.post(`http://localhost:${port}/api/auth/token`, 
@@ -423,11 +432,15 @@ app.post('/api/meetings/:meetingId/send-proposals', validateBootstrapToken, asyn
         // Generate and send emails for vital participants
         for (const participant of meeting.vitalParticipants) {
             try {
+
                 const emailContent = generateTimeSelectionEmail(meeting, participant.email, actualBaseUrl);
+                
+                if (!emailContent) {
+                    throw new Error('Failed to generate email content');
+                }
                 
                 console.log(`\n=== SENDING EMAIL TO ${participant.email} ===`);
                 console.log('Subject:', `Time Selection Required: ${meeting.title}`);
-                console.log('Tracking URLs:', Object.keys(emailContent.trackingUrls).length, 'time options');
                 
                 // Send email via Microsoft Graph
                 const emailSent = await sendEmailViaGraph(
@@ -482,7 +495,7 @@ app.post('/api/meetings/:meetingId/send-proposals', validateBootstrapToken, asyn
     }
 });
 
-// Handle time slot selection responses
+// [REMOVED] HTML response handling - replaced by Adaptive Cards
 app.get('/api/meetings/:meetingId/respond', async (req, res) => {
     try {
         const { meetingId } = req.params;
@@ -698,7 +711,7 @@ app.get('/api/meetings', validateBootstrapToken, async (req, res) => {
     }
 });
 
-// Email open tracking pixel
+// [REMOVED] Email tracking pixel - no longer needed
 app.get('/api/meetings/:meetingId/track/open', async (req, res) => {
     try {
         const { meetingId } = req.params;
@@ -1654,6 +1667,10 @@ function analyzeSlotAvailability(slotStart, slotEnd, attendeesAvailability) {
     };
 }
 
+
+// Mount routes
+app.use('/api/oam', oamRoutes);
+app.use('/api/meetings', validateBootstrapToken, meetingsRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
