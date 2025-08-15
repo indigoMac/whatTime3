@@ -14,6 +14,7 @@ const meetingStore = require('../storage/MeetingStore');
 router.get('/:id/responses', async (req, res) => {
     try {
         const { id } = req.params;
+        console.log('📊 Getting responses for meeting:', id);
         
         // Get meeting to verify it exists and check authorization
         const meeting = meetingStore.getById(id);
@@ -26,8 +27,23 @@ router.get('/:id/responses', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized - only organizer can view responses' });
         }
         
-        // Get tallies from store
+        // Get tallies from store  
         const tallies = meetingStore.tallies(id);
+        console.log('📊 Tallies result:', { 
+            meetingId: id, 
+            totalResponses: Object.keys(tallies.responses).length,
+            slotsWithVotes: Object.keys(tallies.bySlot).filter(slotId => tallies.bySlot[slotId].count > 0),
+            stats: tallies.stats 
+        });
+        
+        // Log sample slot data to debug frontend consensus calculation
+        const sampleSlot = Object.keys(tallies.bySlot)[0];
+        if (sampleSlot) {
+            console.log('📊 Sample slot data:', {
+                slotId: sampleSlot,
+                slotData: tallies.bySlot[sampleSlot]
+            });
+        }
         
         // Add meeting metadata to response
         const response = {

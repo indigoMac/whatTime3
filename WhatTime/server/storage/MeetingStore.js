@@ -293,6 +293,7 @@ class MeetingStore {
      */
     getResponseStats(pollId) {
         const tallies = this.tallies(pollId);
+        const meeting = this.getById(pollId);
         
         return {
             totalVitalParticipants: tallies.stats.totalVital,
@@ -303,8 +304,8 @@ class MeetingStore {
             responseRate: tallies.stats.totalVital > 0 
                 ? Math.round((tallies.stats.vitalResponded / tallies.stats.totalVital) * 100) 
                 : 0,
-            hasConsensus: this.checkConsensus(tallies.bySlot, tallies.stats.totalVital),
-            topChoice: this.getTopChoice(tallies.bySlot),
+            hasConsensus: this.checkConsensus(tallies.bySlot, tallies.stats.totalVital, meeting.vitalParticipants),
+            topChoice: this.getTopChoice(tallies.bySlot, meeting.vitalParticipants),
             timeSlotCounts: tallies.bySlot
         };
     }
@@ -313,28 +314,42 @@ class MeetingStore {
      * Check if we have enough consensus to proceed
      * Requires 70% of vital participants to agree on a time slot
      */
-    checkConsensus(bySlot, totalVital) {
+    checkConsensus(bySlot, totalVital, vitalParticipants) {
         const threshold = Math.ceil(totalVital * 0.7);
+        
         return Object.values(bySlot).some(slot => {
-            const vitalCount = slot.voters ? slot.voters.length : 0;
-            return vitalCount >= threshold;
+            // Count only vital participants who voted for this slot
+            const vitalVoters = slot.voters ? slot.voters.filter(voter => 
+                vitalParticipants.some(p => p.email.toLowerCase() === voter.toLowerCase())
+            ) : [];
+            
+            return vitalVoters.length >= threshold;
         });
     }
 
     /**
-     * Get the time slot with the most votes
+     * Get the time slot with the most votes (prioritizing vital participants)
      */
-    getTopChoice(bySlot) {
+    getTopChoice(bySlot, vitalParticipants) {
         let topSlot = null;
-        let maxCount = 0;
+        let maxVitalCount = 0;
 
         Object.entries(bySlot).forEach(([slotId, data]) => {
-            if (data.count > maxCount) {
-                maxCount = data.count;
+            // Count vital participants who voted for this slot
+            const vitalVoters = data.voters ? data.voters.filter(voter => 
+                vitalParticipants.some(p => p.email.toLowerCase() === voter.toLowerCase())
+            ) : [];
+            
+            // Prioritize slots with more vital participant votes
+            // If tied, pick the first one found (deterministic)
+            if (vitalVoters.length > maxVitalCount || (vitalVoters.length === maxVitalCount && topSlot === null)) {
+                maxVitalCount = vitalVoters.length;
+                const totalVital = vitalParticipants.length;
                 topSlot = {
                     slotId,
                     count: data.count,
-                    percentage: Math.round((data.count / Math.max(1, data.voters?.length || 0)) * 100),
+                    vitalCount: vitalVoters.length,
+                    percentage: totalVital > 0 ? Math.round((vitalVoters.length / totalVital) * 100) : 0,
                     respondents: data.voters || []
                 };
             }

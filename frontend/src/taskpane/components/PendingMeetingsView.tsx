@@ -191,12 +191,14 @@ export function PendingMeetingsView({ onConfirmMeeting }: PendingMeetingsViewPro
       const tallies = await response.json();
       
       // Update selectedMeeting with new response data
+      // PRESERVE existing consensus and topChoice from backend calculation
       setSelectedMeeting(prev => {
         if (!prev || prev.id !== meetingId) return prev;
         
         return {
           ...prev,
           responseStats: {
+            ...prev.responseStats, // Preserve existing hasConsensus and topChoice
             totalVitalParticipants: tallies.stats.totalVital,
             totalOptionalParticipants: tallies.stats.totalOptional,
             respondedCount: tallies.stats.vitalResponded,
@@ -205,59 +207,6 @@ export function PendingMeetingsView({ onConfirmMeeting }: PendingMeetingsViewPro
             responseRate: tallies.stats.totalVital > 0 
               ? Math.round((tallies.stats.vitalResponded / tallies.stats.totalVital) * 100) 
               : 0,
-            hasConsensus: false, // Will be computed below
-            topChoice: null, // Will be computed below
-            timeSlotCounts: {}
-          }
-        };
-      });
-
-      // Find consensus and top choice
-      let topChoice = null;
-      let maxVitalCount = 0;
-      let hasConsensus = false;
-      const consensusThreshold = Math.ceil(tallies.stats.totalVital * 0.7);
-
-      Object.entries(tallies.bySlot).forEach(([slotId, slotData]: [string, any]) => {
-        if (slotData.count > 0 && slotData.voters) {
-          // Count vital voters for this slot
-          const vitalVoters = slotData.voters.filter((voter: string) => 
-            selectedMeeting?.vitalParticipants.some(p => 
-              p.email.toLowerCase() === voter.toLowerCase()
-            )
-          );
-          
-          const vitalCount = vitalVoters.length;
-          
-          if (vitalCount >= consensusThreshold) {
-            hasConsensus = true;
-          }
-
-          if (vitalCount > maxVitalCount) {
-            maxVitalCount = vitalCount;
-            topChoice = {
-              slotId,
-              count: slotData.count,
-              vitalCount,
-              percentage: tallies.stats.totalVital > 0 
-                ? Math.round((vitalCount / tallies.stats.totalVital) * 100)
-                : 0,
-              respondents: slotData.voters
-            };
-          }
-        }
-      });
-
-      // Update with computed values
-      setSelectedMeeting(prev => {
-        if (!prev || prev.id !== meetingId) return prev;
-        
-        return {
-          ...prev,
-          responseStats: {
-            ...prev.responseStats,
-            hasConsensus,
-            topChoice,
             timeSlotCounts: tallies.bySlot
           }
         };
@@ -568,10 +517,14 @@ export function PendingMeetingsView({ onConfirmMeeting }: PendingMeetingsViewPro
                     ? Math.round((vitalVoters.length / selectedMeeting.responseStats.totalVitalParticipants) * 100)
                     : 0;
                   
+                  // Check if THIS slot meets consensus threshold (70%)
+                  const consensusThreshold = Math.ceil(selectedMeeting.responseStats.totalVitalParticipants * 0.7);
+                  const slotHasConsensus = vitalVoters.length >= consensusThreshold;
+                  
                   return (
                     <div 
                       key={slot.id} 
-                      className={`border rounded-lg p-4 ${isTopChoice ? 'border-green-500 bg-green-50' : 'border-gray-200'}`}
+                      className={`border rounded-lg p-4 ${slotHasConsensus ? 'border-green-500 bg-green-50' : 'border-gray-200'}`}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div>
@@ -613,10 +566,11 @@ export function PendingMeetingsView({ onConfirmMeeting }: PendingMeetingsViewPro
                         </div>
                       )}
                       
-                      {isTopChoice && selectedMeeting.responseStats.hasConsensus && (
+                      {slotHasConsensus && (
                         <div className="mt-3 pt-3 border-t">
                           <div className="mb-2 text-sm text-green-600 font-medium">
-                            ✓ Quorum reached! {vitalPercentage}% of vital participants agree
+                            ✓ Voting Threshold reached! {vitalPercentage}% of vital participants agree
+                            {isTopChoice && ' (Top Choice)'}
                           </div>
                           <Button 
                             className="w-full" 
