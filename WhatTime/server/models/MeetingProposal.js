@@ -28,7 +28,7 @@ class MeetingProposal {
         
         // Response tracking
         this.responses = data.responses || {}; // email -> response data
-        this.responseStats = data.responseStats || this.calculateResponseStats();
+        // Note: responseStats are now calculated dynamically via MeetingStore.getResponseStats()
         
         // Email tracking
         this.emailTrackingTokens = data.emailTrackingTokens || {}; // email -> unique token
@@ -74,134 +74,12 @@ class MeetingProposal {
             token: token
         };
 
-        this.responseStats = this.calculateResponseStats();
         this.updatedAt = new Date().toISOString();
         
         return this.responses[email];
     }
 
-    /**
-     * Calculate response statistics
-     */
-    calculateResponseStats() {
-        const vitalEmails = this.vitalParticipants.map(p => p.email.toLowerCase());
-        const optionalEmails = this.optionalParticipants.map(p => p.email.toLowerCase());
-        const vitalResponses = Object.keys(this.responses).filter(email => 
-            vitalEmails.includes(email.toLowerCase())
-        );
-        const optionalResponses = Object.keys(this.responses).filter(email => 
-            optionalEmails.includes(email.toLowerCase())
-        );
-        
-        const timeSlotCounts = {};
-        const totalVital = vitalEmails.length;
-        const totalOptional = optionalEmails.length;
-        
-        // Count responses per time slot
-        this.proposedTimeSlots.forEach(slot => {
-            timeSlotCounts[slot.id] = {
-                count: 0,
-                vitalCount: 0,
-                optionalCount: 0,
-                percentage: 0,
-                respondents: [],
-                vitalRespondents: [],
-                optionalRespondents: []
-            };
-        });
 
-        // Process responses - handle both single selection (legacy) and multi-selection (Adaptive Cards)
-        [...vitalResponses, ...optionalResponses].forEach(email => {
-            const response = this.responses[email];
-            const isVital = vitalEmails.includes(email.toLowerCase());
-            
-            // Handle multi-selection from Adaptive Cards
-            if (response.slots && Array.isArray(response.slots)) {
-                response.slots.forEach(slotId => {
-                    if (timeSlotCounts[slotId]) {
-                        timeSlotCounts[slotId].count++;
-                        timeSlotCounts[slotId].respondents.push(email);
-                        
-                        if (isVital) {
-                            timeSlotCounts[slotId].vitalCount++;
-                            timeSlotCounts[slotId].vitalRespondents.push(email);
-                        } else {
-                            timeSlotCounts[slotId].optionalCount++;
-                            timeSlotCounts[slotId].optionalRespondents.push(email);
-                        }
-                    }
-                });
-            }
-            // Handle single selection from HTML fallback
-            else if (response.timeSlotId && timeSlotCounts[response.timeSlotId]) {
-                const slotId = response.timeSlotId;
-                timeSlotCounts[slotId].count++;
-                timeSlotCounts[slotId].respondents.push(email);
-                
-                if (isVital) {
-                    timeSlotCounts[slotId].vitalCount++;
-                    timeSlotCounts[slotId].vitalRespondents.push(email);
-                } else {
-                    timeSlotCounts[slotId].optionalCount++;
-                    timeSlotCounts[slotId].optionalRespondents.push(email);
-                }
-            }
-        });
-
-        // Calculate percentages based on vital participants
-        Object.keys(timeSlotCounts).forEach(slotId => {
-            const vitalCount = timeSlotCounts[slotId].vitalCount;
-            timeSlotCounts[slotId].percentage = totalVital > 0 ? Math.round((vitalCount / totalVital) * 100) : 0;
-        });
-
-        return {
-            totalVitalParticipants: totalVital,
-            totalOptionalParticipants: totalOptional,
-            respondedCount: vitalResponses.length,
-            vitalRespondedCount: vitalResponses.length,
-            optionalRespondedCount: optionalResponses.length,
-            responseRate: totalVital > 0 ? Math.round((vitalResponses.length / totalVital) * 100) : 0,
-            timeSlotCounts,
-            hasConsensus: this.checkConsensus(timeSlotCounts, totalVital),
-            topChoice: this.getTopChoice(timeSlotCounts)
-        };
-    }
-
-    /**
-     * Check if we have enough consensus to proceed
-     * Requires 70% of vital participants to agree on a time slot
-     */
-    checkConsensus(timeSlotCounts, totalVital) {
-        const threshold = Math.ceil(totalVital * 0.7); // 70% consensus threshold
-        return Object.values(timeSlotCounts).some(slot => slot.vitalCount >= threshold);
-    }
-
-    /**
-     * Get the time slot with the most votes
-     */
-    getTopChoice(timeSlotCounts) {
-        let topSlot = null;
-        let maxVitalCount = 0;
-
-        Object.entries(timeSlotCounts).forEach(([slotId, data]) => {
-            // Prioritize vital participant votes
-            if (data.vitalCount > maxVitalCount) {
-                maxVitalCount = data.vitalCount;
-                topSlot = {
-                    slotId,
-                    count: data.count,
-                    vitalCount: data.vitalCount,
-                    optionalCount: data.optionalCount,
-                    percentage: data.percentage,
-                    respondents: data.respondents,
-                    vitalRespondents: data.vitalRespondents,
-                    optionalRespondents: data.optionalRespondents
-                };
-            }
-        });
-
-        return topSlot;
-    }
 
     /**
      * Move to pending status and mark as sent
@@ -284,7 +162,6 @@ class MeetingProposal {
             proposedTimeSlots: this.proposedTimeSlots,
             selectedTimeSlot: this.selectedTimeSlot,
             responses: this.responses,
-            responseStats: this.responseStats,
             emailTrackingTokens: this.emailTrackingTokens,
             sentAt: this.sentAt,
             confirmedAt: this.confirmedAt,

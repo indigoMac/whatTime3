@@ -659,7 +659,7 @@ app.get('/api/meetings/:meetingId', validateBootstrapToken, async (req, res) => 
                 proposedTimeSlots: meeting.proposedTimeSlots,
                 selectedTimeSlot: meeting.selectedTimeSlot,
                 outlookWebLink: meeting.outlookWebLink,
-                responseStats: meeting.responseStats,
+                responseStats: meetingStore.getResponseStats(meeting.id),
                 responses: Object.keys(meeting.responses).map(email => ({
                     email,
                     timeSlotId: meeting.responses[email].timeSlotId,
@@ -684,7 +684,7 @@ app.get('/api/meetings', validateBootstrapToken, async (req, res) => {
         
         const meetings = meetingStore.getUserMeetings(req.user.oid, status);
         
-        // Return simplified meeting list
+        // Return simplified meeting list with live response stats
         const meetingList = meetings.map(meeting => ({
             id: meeting.id,
             title: meeting.title,
@@ -694,7 +694,7 @@ app.get('/api/meetings', validateBootstrapToken, async (req, res) => {
             confirmedAt: meeting.confirmedAt,
             vitalCount: meeting.vitalParticipants.length,
             optionalCount: meeting.optionalParticipants.length,
-            responseStats: meeting.responseStats
+            responseStats: meetingStore.getResponseStats(meeting.id)
         }));
 
         res.json({

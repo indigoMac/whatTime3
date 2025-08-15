@@ -200,6 +200,9 @@ class MeetingStore {
             timestamp: new Date().toISOString()
         };
 
+        // Update timestamp
+        meeting.updatedAt = new Date().toISOString();
+
         // Save the updated meeting
         this.save(meeting);
 
@@ -281,6 +284,63 @@ class MeetingStore {
                 totalOptional: meeting.optionalParticipants.length
             }
         };
+    }
+
+    /**
+     * Get simplified response stats for a meeting (single source of truth)
+     * @param {string} pollId - The meeting/poll ID
+     * @returns {Object} Simplified response stats object
+     */
+    getResponseStats(pollId) {
+        const tallies = this.tallies(pollId);
+        
+        return {
+            totalVitalParticipants: tallies.stats.totalVital,
+            totalOptionalParticipants: tallies.stats.totalOptional,
+            respondedCount: tallies.stats.vitalResponded,
+            vitalRespondedCount: tallies.stats.vitalResponded,
+            optionalRespondedCount: tallies.stats.optionalResponded,
+            responseRate: tallies.stats.totalVital > 0 
+                ? Math.round((tallies.stats.vitalResponded / tallies.stats.totalVital) * 100) 
+                : 0,
+            hasConsensus: this.checkConsensus(tallies.bySlot, tallies.stats.totalVital),
+            topChoice: this.getTopChoice(tallies.bySlot),
+            timeSlotCounts: tallies.bySlot
+        };
+    }
+
+    /**
+     * Check if we have enough consensus to proceed
+     * Requires 70% of vital participants to agree on a time slot
+     */
+    checkConsensus(bySlot, totalVital) {
+        const threshold = Math.ceil(totalVital * 0.7);
+        return Object.values(bySlot).some(slot => {
+            const vitalCount = slot.voters ? slot.voters.length : 0;
+            return vitalCount >= threshold;
+        });
+    }
+
+    /**
+     * Get the time slot with the most votes
+     */
+    getTopChoice(bySlot) {
+        let topSlot = null;
+        let maxCount = 0;
+
+        Object.entries(bySlot).forEach(([slotId, data]) => {
+            if (data.count > maxCount) {
+                maxCount = data.count;
+                topSlot = {
+                    slotId,
+                    count: data.count,
+                    percentage: Math.round((data.count / Math.max(1, data.voters?.length || 0)) * 100),
+                    respondents: data.voters || []
+                };
+            }
+        });
+
+        return topSlot;
     }
 }
 

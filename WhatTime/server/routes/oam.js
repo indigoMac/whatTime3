@@ -58,10 +58,16 @@ router.post('/submit', async (req, res) => {
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     
     try {
-
+        console.log('OAM submit request received:', {
+            pollId: req.body.pollId,
+            user: req.body.user,
+            slotsType: typeof req.body.slots,
+            userAgent: req.headers['user-agent']
+        });
         
         // Verify OAM request
         if (!verifyOAM(req)) {
+            console.error('OAM verification failed for request');
             return res.status(401).json({ error: 'Invalid OAM request' });
         }
         
@@ -88,9 +94,15 @@ router.post('/submit', async (req, res) => {
         
         // Store the response
         try {
-            const meeting = await meetingStore.addResponse(pollId, user, slotArray);
+            const meeting = meetingStore.addResponse(pollId, user, slotArray);
+            console.log(`✅ OAM response stored successfully: ${user} selected ${slotArray.length} slots for meeting ${pollId}`);
         } catch (storeError) {
-            console.error('Error storing response:', storeError);
+            console.error('❌ Error storing OAM response:', {
+                pollId,
+                user,
+                slots: slotArray,
+                error: storeError.message
+            });
             return res.status(500).json({ 
                 error: 'Failed to store response',
                 details: storeError.message 

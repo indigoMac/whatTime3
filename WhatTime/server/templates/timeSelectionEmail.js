@@ -34,13 +34,18 @@ function generateTimeSelectionEmail(meeting, recipientEmail, baseUrl) {
         });
         
         // Embed Adaptive Card as JSON script
-        adaptiveCardScript = `
-    <script type="application/adaptivecard+json">
-${JSON.stringify(adaptiveCard, null, 2)}
-    </script>
-        `;
+        // Use compact JSON to avoid whitespace issues in email clients
+        const escapedJson = JSON.stringify(adaptiveCard)
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"');
+        
+        adaptiveCardScript = `<script type="application/adaptivecard+json">${JSON.stringify(adaptiveCard)}</script>`;
     } catch (error) {
-        console.error('Error building Adaptive Card:', error);
+        console.error('❌ Error building Adaptive Card for', recipientEmail, ':', {
+            meetingId: meeting.id,
+            error: error.message,
+            apiBase: process.env.PUBLIC_API_BASE || baseUrl
+        });
         // Continue without Adaptive Card if there's an error
         adaptiveCardScript = '';
     }
